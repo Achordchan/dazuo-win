@@ -1,0 +1,9 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/ziyuan">
+        <file>copy.svg</file>
+        <file>switch.svg</file>
+        <file>restore.svg</file>
+        <file>close.svg</file>
+    </qresource>
+</RCC> 

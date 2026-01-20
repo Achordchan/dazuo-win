@@ -1,0 +1,24 @@
+[AI]
+# 默认AI翻译服务设置
+default_service = google
+
+[API_KEYS]
+# API密钥设置 - 出于安全考虑，默认为空，需用户在应用中配置
+doubao = 
+deepseek = 
+
+[TRANSLATION]
+# 翻译行为设置
+auto_detect = true
+max_length = 5000
+request_timeout = 30
+
+[MODEL]
+# 模型设置
+deepseek_model = deepseek-chat
+doubao_model = doubao-lite
+
+[RETRY]
+# 重试设置
+max_retries = 3
+retry_delay = 2 
