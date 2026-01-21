@@ -8,6 +8,7 @@ __pycache__/
 .eggs/
 .venv/
 .venv311/
+.venv-mac/
 venv/
 
 # Build artifacts

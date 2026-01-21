@@ -316,12 +316,14 @@ class SheZhiChuangKou(QDialog):
     def _load_settings(self):
         """加载当前设置"""
         api_name = self.parent.config.get("translation.api", "google")
-        if api_name == "openai_compat":
+        if api_name == "achord":
+            api_index = 0
+        elif api_name == "google":
             api_index = 1
-        elif api_name == "achord":
+        elif api_name == "openai_compat":
             api_index = 2
         else:
-            api_index = 0
+            api_index = 1
         self.translation_api_combo.setCurrentIndex(api_index)
 
         hotkey = self.parent.config.get("shortcuts.copy_translate", "ctrl+c,c")
@@ -403,12 +405,12 @@ class SheZhiChuangKou(QDialog):
                 self.parent.config.set("show_in_dock", show_in_dock)
                 apply_macos_dock_visibility(show_in_dock)
 
-            if self.translation_api_combo.currentIndex() == 1:
-                api_name = "openai_compat"
-            elif self.translation_api_combo.currentIndex() == 2:
+            if self.translation_api_combo.currentIndex() == 0:
                 api_name = "achord"
-            else:
+            elif self.translation_api_combo.currentIndex() == 1:
                 api_name = "google"
+            else:
+                api_name = "openai_compat"
             self.parent.config.set("translation.api", api_name)
 
             vendor = self.vendor_combo.currentText()
