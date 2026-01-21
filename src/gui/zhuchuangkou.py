@@ -95,7 +95,8 @@ class ZhuChuangKou(QMainWindow):
         
         # 获取资源路径
         if getattr(sys, 'frozen', False):
-            self.resource_dir = os.path.join(sys._MEIPASS, 'src', 'ziyuan')
+            base_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+            self.resource_dir = os.path.join(base_dir, 'src', 'ziyuan')
         else:
             self.resource_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'src', 'ziyuan')
         

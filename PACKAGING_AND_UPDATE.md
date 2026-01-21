@@ -14,22 +14,28 @@
 pip install -r requirements.txt
 ```
 
-### 1.2 使用 PyInstaller 生成可执行文件
+### 1.2 使用 Nuitka 生成可执行文件
 ```bash
 # 一键脚本
 .\build.bat
 
-# 或手动
-pyinstaller --clean --noconfirm build.spec
+# 或手动（PowerShell）
+python -m nuitka `
+  --standalone `
+  --windows-disable-console `
+  --output-dir=dist_nuitka `
+  --output-filename="大佐翻译官.exe" `
+  --windows-icon-from-ico=src\ziyuan\logo.ico `
+  --enable-plugin=pyqt5 `
+  --include-qt-plugins=platforms,imageformats,styles `
+  --include-data-dir=src\ziyuan=src\ziyuan `
+  --include-data-dir=src\config=src\config `
+  src\main.py
 ```
 
-`build.spec` 已配置：
-- 打包为单个 exe
-- 自动包含资源文件
-- 设置程序图标
-- 隐藏控制台窗口
-
-产物位于：`dist/`
+产物位于：`dist_nuitka/`
+- `dist_nuitka/大佐翻译官.exe`
+- `dist_nuitka/大佐翻译官.dist/`（依赖与资源）
 
 ### 1.3 使用 Inno Setup 生成安装包
 1. 安装 [Inno Setup](https://jrsoftware.org/isinfo.php)

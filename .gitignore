@@ -13,9 +13,10 @@ venv/
 
 # Build artifacts
 build/
-dist/
+dist_nuitka/
 output/
 *.spec
+!build.spec
 
 # Logs
 *.log

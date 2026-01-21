@@ -825,7 +825,7 @@ class MiniChuangKou(QWidget):
         
         # 获取资源路径
         if getattr(sys, 'frozen', False):
-            base_dir = sys._MEIPASS
+            base_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
         else:
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         

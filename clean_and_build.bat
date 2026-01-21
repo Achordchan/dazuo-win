@@ -1,19 +1,20 @@
 @echo off
+chcp 65001 >nul
+set PYTHONUTF8=1
+
 rmdir /s /q build
 rmdir /s /q dist
+rmdir /s /q dist_nuitka
 call .venv311\Scripts\activate.bat
-pyinstaller --clean ^
-    --noconfirm ^
-    --windowed ^
-    --icon="src\ziyuan\logo.ico" ^
-    --add-data "src/ziyuan;src/ziyuan" ^
-    --hidden-import=PyQt5.QtSvg ^
-    --hidden-import=aiohttp ^
-    --hidden-import=openai ^
-    --hidden-import=keyboard ^
-    --hidden-import=pyperclip ^
-    --hidden-import=qasync ^
-    --hidden-import=cryptography ^
-    --name "大佐翻译官" ^
-    "src/main.py"
+python -m nuitka ^
+    --standalone ^
+    --windows-disable-console ^
+    --output-dir=dist_nuitka ^
+    --output-filename="大佐翻译官.exe" ^
+    --windows-icon-from-ico=src\ziyuan\logo.ico ^
+    --enable-plugin=pyqt5 ^
+    --include-qt-plugins=platforms,imageformats,styles ^
+    --include-data-dir=src\ziyuan=src\ziyuan ^
+    --include-data-dir=src\config=src\config ^
+    src\main.py
 pause

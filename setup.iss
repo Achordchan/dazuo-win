@@ -1,6 +1,6 @@
 ; 脚本由 Inno Setup 脚本向导生成
 #define MyAppName "大佐翻译官"
-#define MyAppVersion "1.2.0"
+#include "version.generated.iss"
 #define MyAppPublisher "大佐翻译官"
 #define MyAppURL "https://gitee.com/Achordchan/dazuofanyiguan"
 #define MyAppExeName "大佐翻译官.exe"
@@ -16,7 +16,7 @@ AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=output
-OutputBaseFilename=dazuofanyiguan_setup.for.windows
+OutputBaseFilename=dazuofanyiguan_setup.for.windows_{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 SetupIconFile=src\ziyuan\logo.ico
@@ -29,12 +29,8 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-; 主程序
-Source: "dist\大佐翻译官.exe"; DestDir: "{app}"; Flags: ignoreversion
-; 图标和资源文件
-Source: "src\ziyuan\*"; DestDir: "{app}\src\ziyuan"; Flags: ignoreversion recursesubdirs createallsubdirs
-; 配置文件和目录
-Source: "src\config\*"; DestDir: "{app}\src\config"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Nuitka 运行时依赖与资源（含主程序）
+Source: "dist_nuitka\main.dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; 确保配置目录存在
 [Dirs]
 Name: "{app}\src\config"; Flags: uninsalwaysuninstall

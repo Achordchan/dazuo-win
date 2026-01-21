@@ -239,8 +239,14 @@ class SearchableComboBox(QComboBox):
 
     def hidePopup(self):
         popup = getattr(self, "_popup", None)
-        if popup is not None and popup.isVisible():
-            popup.hide()
+        if popup is None:
+            return
+
+        try:
+            if popup.isVisible():
+                popup.hide()
+        except RuntimeError:
+            self._popup = None
 
     def closeEvent(self, event):
         popup = getattr(self, "_popup", None)

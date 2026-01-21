@@ -7,16 +7,28 @@ import site
 import logging
 import ctypes
 import argparse
-from pathlib import Path
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import QSharedMemory
+
+def _get_frozen_base_dir():
+    if hasattr(sys, '_MEIPASS'):
+        return sys._MEIPASS
+
+    exe_dir = os.path.dirname(sys.executable)
+    dist_dir = os.path.join(
+        exe_dir,
+        f"{os.path.splitext(os.path.basename(sys.executable))[0]}.dist",
+    )
+    if os.path.isdir(dist_dir):
+        return dist_dir
+    return exe_dir
 
 def get_resource_path(relative_path):
     """获取资源文件的绝对路径"""
     try:
         # PyInstaller创建临时文件夹,将路径存储在_MEIPASS
-        if hasattr(sys, '_MEIPASS'):
-            base_path = sys._MEIPASS
+        if getattr(sys, 'frozen', False):
+            base_path = _get_frozen_base_dir()
         else:
             # 获取脚本所在的目录
             base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -98,7 +110,7 @@ def check_resources():
 
 # 将项目根目录添加到Python路径
 if getattr(sys, 'frozen', False):
-    project_root = sys._MEIPASS
+    project_root = _get_frozen_base_dir()
 else:
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -237,8 +249,21 @@ def main():
                 loop.run_forever()
             finally:
                 try:
+                    try:
+                        all_tasks = asyncio.all_tasks(loop)
+                    except TypeError:
+                        all_tasks = asyncio.all_tasks()
+
+                    pending = [task for task in all_tasks if not task.done()]
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
                     if hasattr(window, "fanyi") and hasattr(window.fanyi, "close_current_api"):
                         loop.run_until_complete(window.fanyi.close_current_api())
+
+                    loop.run_until_complete(loop.shutdown_asyncgens())
                 except Exception as e:
                     logging.error(f"关闭翻译会话失败: {e}")
             

@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (QMessageBox, QDialog, QVBoxLayout, QHBoxLayout, QLa
 from PyQt5.QtCore import Qt
 
 from .gengxinrizhi import GengXinRiZhi
+from ..version import APP_VERSION
 from ..gongju.update import Updater
 
 
@@ -142,6 +143,13 @@ def delayed_show_changelog(self):
             config.add_section('App')
             logger.info("创建新的App配置段")
 
+        config_changed = False
+        last_version = config.get('App', 'last_version', fallback="")
+        if last_version != APP_VERSION:
+            config.set('App', 'first_run', '0')
+            config.set('App', 'last_version', APP_VERSION)
+            config_changed = True
+
         first_run = config.getint('App', 'first_run', fallback=0)
         logger.info(f"当前first_run值: {first_run}")
 
@@ -151,6 +159,7 @@ def delayed_show_changelog(self):
             dialog.exec_()
 
             config.set('App', 'first_run', '1')
+            config_changed = True
             try:
                 with open(config_path, 'w', encoding='utf-8') as f:
                     config.write(f)
@@ -193,6 +202,14 @@ def delayed_show_changelog(self):
                         logger.info("使用管理员权限成功更新配置文件")
                     except Exception as e2:
                         logger.error(f"使用管理员权限写入配置文件失败: {e2}")
+
+        if config_changed and first_run != 0:
+            try:
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    config.write(f)
+                logger.info("成功更新配置文件")
+            except Exception as e:
+                logger.error(f"写入配置文件失败: {e}")
 
     except Exception as e:
         logger.error(f"显示更新日志失败: {e}")
