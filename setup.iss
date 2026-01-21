@@ -1,6 +1,6 @@
 ; 脚本由 Inno Setup 脚本向导生成
 #define MyAppName "大佐翻译官"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "大佐翻译官"
 #define MyAppURL "https://gitee.com/Achordchan/dazuofanyiguan"
 #define MyAppExeName "大佐翻译官.exe"
