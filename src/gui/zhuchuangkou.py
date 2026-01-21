@@ -85,6 +85,9 @@ class ZhuChuangKou(QMainWindow):
         self.config = Config()
         if sys.platform == "darwin":
             apply_macos_dock_visibility(self.config.get("show_in_dock", True))
+            app = QApplication.instance()
+            if app:
+                app.setQuitOnLastWindowClosed(self.config.get("show_in_dock", True))
         
         # 初始化Mini窗口
         self.mini_window = None
@@ -792,12 +795,20 @@ class ZhuChuangKou(QMainWindow):
         except Exception as e:
             logger.error(f"重置源语言显示失败: {e}")
 
+    def _show_main_window(self):
+        """显示并激活主窗口（避免macOS下无响应）"""
+        if self.isHidden():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
     def _on_tray_icon_activated(self, reason):
         """处理托盘图标的激活事件"""
         if reason == QSystemTrayIcon.DoubleClick:
             # 双击托盘图标时显示主窗口
-            self.show()
-            self.activateWindow()  # 激活窗口
+            self._show_main_window()
     
     def _on_update_available(self, version, notes, force_update):
         _update_controller.on_update_available(self, version, notes, force_update)
@@ -974,6 +985,10 @@ class ZhuChuangKou(QMainWindow):
     def closeEvent(self, event):
         """窗口关闭事件"""
         if hasattr(self, 'tray_icon') and self.tray_icon.isVisible():
+            if sys.platform == "darwin" and self.config.get("show_in_dock", True):
+                event.accept()
+                super().closeEvent(event)
+                return
             if self.mini_window:
                 self.mini_window.hide()
             self.hide()

@@ -169,8 +169,14 @@ class Updater(QObject):
                 subprocess.Popen(["open", file_path])
                 return
 
-            # 使用subprocess启动安装程序
-            subprocess.Popen([file_path], shell=True)
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"安装包不存在: {file_path}")
+
+            # 清理兼容层，避免错误识别系统版本（如误报需要 Win7 SP1）
+            os.environ.pop("__COMPAT_LAYER", None)
+
+            # 使用subprocess启动安装程序（避免 shell 继承兼容层）
+            subprocess.Popen([file_path], shell=False, env=os.environ.copy())
             # 退出当前程序
             sys.exit(0)
         except Exception as e:

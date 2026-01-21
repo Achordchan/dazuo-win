@@ -34,7 +34,7 @@ if sys.platform == 'win32':
         print(f"设置应用程序ID失败: {e}")
 
 # 设置 Qt 插件路径
-if sys.platform == 'win32':
+if sys.platform == 'win32' or sys.platform == 'darwin':
     try:
         import PyQt5
         qt_platform_path = os.path.join(os.path.dirname(PyQt5.__file__), 'Qt5', 'plugins', 'platforms')
