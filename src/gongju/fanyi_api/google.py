@@ -13,9 +13,11 @@ import time
 import asyncio
 import logging
 
+from ..fanyi import FanYiJieKou
+
 logger = logging.getLogger(__name__)
 
-class GoogleAPI:
+class GoogleAPI(FanYiJieKou):
     """Google翻译接口实现"""
     
     # 语言代码映射
@@ -179,3 +181,6 @@ class GoogleAPI:
         if self.session:
             await self.session.close()
             self.session = None
+
+    async def health_check(self) -> None:
+        await self.fanyi("test", "自动检测", "简体中文")

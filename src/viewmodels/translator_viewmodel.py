@@ -92,6 +92,38 @@ class TranslatorViewModel(QObject):
         if clear_output:
             self.output_text_changed.emit("")
 
+    async def cancel_and_wait(self, clear_output: bool) -> None:
+        self._debounce_timer.stop()
+
+        task = self._translation_task
+        if task is not None:
+            task.cancel()
+        self._translation_task = None
+
+        self._token_counter += 1
+        self._active_token = self._token_counter
+
+        self._set_is_translating(False)
+        self.ai_phase_changed.emit(None)
+        self.estimated_ai_tokens_changed.emit(None)
+        self.last_translation_duration_ms_changed.emit(None)
+        self.detected_source_language_changed.emit(None)
+        self.error_message_changed.emit(None)
+
+        self._active_ai_model_name = None
+        self._active_estimated_ai_tokens = None
+
+        if clear_output:
+            self.output_text_changed.emit("")
+
+        if task is not None:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+
     def _on_debounce_timeout(self) -> None:
         self._start_translate_task()
 

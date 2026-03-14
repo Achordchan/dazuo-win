@@ -3,15 +3,18 @@ import os
 from PyQt5.QtWidgets import QWidget, QHBoxLayout, QLabel, QPushButton, QDialog, QVBoxLayout, QFrame
 from PyQt5.QtWidgets import QGraphicsDropShadowEffect
 from PyQt5.QtCore import Qt, QSize, QUrl
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QPainterPath, QColor
+from PyQt5.QtGui import QDesktopServices, QIcon, QPixmap, QPainter, QPainterPath, QColor
 from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply, QSslSocket
+
+from ..version import APP_VERSION
 
 
 class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._parent = parent
         self.setWindowTitle("关于")
-        self.setFixedSize(520, 420)
+        self.setFixedSize(560, 500)
         self.setObjectName("aboutDialog")
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
@@ -22,7 +25,7 @@ class AboutDialog(QDialog):
         card.setObjectName("aboutCard")
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(28, 24, 28, 24)
-        card_layout.setSpacing(12)
+        card_layout.setSpacing(14)
 
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(24)
@@ -36,70 +39,106 @@ class AboutDialog(QDialog):
         self.avatar_label.setObjectName("aboutAvatar")
         card_layout.addWidget(self.avatar_label, alignment=Qt.AlignHCenter)
 
+        title_label = QLabel("大佐翻译官")
+        title_label.setObjectName("aboutTitle")
+        title_label.setAlignment(Qt.AlignCenter)
+        card_layout.addWidget(title_label)
+
+        subtitle_label = QLabel(f"版本：v{APP_VERSION}")
+        subtitle_label.setObjectName("aboutMeta")
+        subtitle_label.setAlignment(Qt.AlignCenter)
+        card_layout.addWidget(subtitle_label)
+
         info_layout = QVBoxLayout()
-        info_layout.setSpacing(8)
-        info_layout.addLayout(self._build_info_row("👤", "作者：Achord"))
-        info_layout.addLayout(self._build_info_row("📞", "Tel: 13160235855"))
-        info_layout.addLayout(
-            self._build_info_row("✉️", "Email: <a href='mailto:achordchan@gmail.com'>achordchan@gmail.com</a>")
+        info_layout.setSpacing(10)
+        info_layout.addWidget(self._build_info_row("src/ziyuan/about-author.svg", "作者：Achord"))
+        info_layout.addWidget(self._build_info_row("src/ziyuan/about-phone.svg", "Tel: 13160235855"))
+        info_layout.addWidget(
+            self._build_info_row("src/ziyuan/about-mail.svg", "Email: <a href='mailto:achordchan@gmail.com'>achordchan@gmail.com</a>")
         )
-        info_layout.addLayout(self._build_info_row("🏷️", "版本：v1.1.0"))
-        info_layout.addLayout(self._build_info_row("📄", "许可：MIT License"))
+        info_layout.addWidget(self._build_info_row("src/ziyuan/about-version.svg", f"版本：v{APP_VERSION}"))
+        info_layout.addWidget(self._build_info_row("src/ziyuan/about-license.svg", "许可：MIT License"))
         card_layout.addLayout(info_layout)
 
         actions_layout = QHBoxLayout()
-        actions_layout.setSpacing(16)
-        actions_layout.addLayout(self._build_action_item("🌐", "项目地址", "#"))
-        actions_layout.addLayout(self._build_action_item("🛡️", "隐私条款", "#"))
-        actions_layout.addLayout(self._build_action_item("📄", "开源协议", "#"))
-        actions_layout.addLayout(self._build_action_item("💚", "赞助我", "#"))
+        actions_layout.setSpacing(12)
+        actions_layout.addWidget(self._build_action_button("src/ziyuan/about-link.svg", "项目地址", "https://gitee.com/Achordchan/dazuofanyiguan"))
+        actions_layout.addWidget(self._build_action_button("src/ziyuan/about-link.svg", "问题反馈", "https://gitee.com/Achordchan/dazuofanyiguan/issues"))
         card_layout.addLayout(actions_layout)
 
         layout.addWidget(card)
         self._apply_style()
         self._load_avatar("src/ziyuan/头像.jpg")
 
-    def _build_info_row(self, icon: str, text: str):
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        icon_label = QLabel(icon)
+    def _build_info_row(self, icon_path: str, text: str):
+        row_widget = QWidget()
+        row = QHBoxLayout(row_widget)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(10)
+        icon_label = QLabel()
         icon_label.setObjectName("aboutIcon")
+        icon_label.setPixmap(QIcon(icon_path).pixmap(QSize(16, 16)))
+        icon_label.setFixedWidth(20)
         text_label = QLabel(text)
         text_label.setObjectName("aboutInfo")
         text_label.setTextFormat(Qt.RichText)
         text_label.setOpenExternalLinks(True)
-        row.addStretch()
+        text_label.setWordWrap(False)
         row.addWidget(icon_label)
         row.addWidget(text_label)
         row.addStretch()
-        return row
+        return row_widget
 
-    def _build_action_item(self, icon: str, text: str, url: str):
-        row = QHBoxLayout()
-        row.setSpacing(6)
-        icon_label = QLabel(icon)
-        icon_label.setObjectName("aboutActionIcon")
-        link_label = QLabel(f"<a href='{url}'>{text}</a>")
-        link_label.setObjectName("aboutAction")
-        link_label.setTextFormat(Qt.RichText)
-        link_label.setOpenExternalLinks(True)
-        row.addStretch()
-        row.addWidget(icon_label)
-        row.addWidget(link_label)
-        row.addStretch()
-        return row
+    def _build_action_button(self, icon_path: str, text: str, url: str):
+        button = QPushButton(text)
+        button.setObjectName("aboutLinkButton")
+        button.setIcon(QIcon(icon_path))
+        button.setIconSize(QSize(14, 14))
+        button.setCursor(Qt.PointingHandCursor)
+        button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(url)))
+        return button
 
     def _apply_style(self):
+        theme_name = "dark"
+        if self._parent and hasattr(self._parent, "config"):
+            theme_name = self._parent.config.get("theme", "dark")
+
+        palette = {
+            "dark": {
+                "dialog": "#171d25",
+                "card": "#202833",
+                "avatar": "#2b3543",
+                "text": "#f2f6fb",
+                "subtext": "#9fb0c4",
+                "accent": "#7ab7ff",
+            },
+            "light": {
+                "dialog": "#f6f8fb",
+                "card": "#ffffff",
+                "avatar": "#e8eef5",
+                "text": "#3a3f45",
+                "subtext": "#708090",
+                "accent": "#1f7ae0",
+            },
+            "pink": {
+                "dialog": "#fff5f8",
+                "card": "#fffafb",
+                "avatar": "#f7e7ee",
+                "text": "#533846",
+                "subtext": "#8e7281",
+                "accent": "#cc5c8a",
+            },
+        }
+        c = palette.get(theme_name, palette["dark"])
         self.setStyleSheet(
-            "#aboutDialog { background: #f6f8fb; }"
-            "#aboutCard { background: #ffffff; border-radius: 16px; }"
-            "#aboutAvatar { background: #e8eef5; border-radius: 44px; border: 2px solid #ffffff; }"
-            "#aboutIcon { color: #00a16f; font-size: 16px; }"
-            "#aboutInfo { color: #3a3f45; font-size: 13px; }"
-            "#aboutActionIcon { color: #00a16f; font-size: 14px; }"
-            "#aboutAction { color: #1f7ae0; font-size: 12px; }"
-            "#aboutAction a { text-decoration: none; }"
-            "#aboutAction a:hover { text-decoration: underline; }"
+            f"#aboutDialog {{ background: {c['dialog']}; }}"
+            f"#aboutCard {{ background: {c['card']}; border-radius: 16px; }}"
+            f"#aboutAvatar {{ background: {c['avatar']}; border-radius: 44px; border: 2px solid {c['card']}; }}"
+            f"#aboutTitle {{ color: {c['text']}; font-size: 18px; font-weight: 700; }}"
+            f"#aboutMeta {{ color: {c['subtext']}; font-size: 12px; margin-bottom: 6px; }}"
+            f"#aboutInfo {{ color: {c['text']}; font-size: 13px; }}"
+            f"#aboutLinkButton {{ background: {c['card']}; color: {c['accent']}; border: 1px solid {c['accent']}; border-radius: 10px; min-height: 34px; padding: 0 14px; text-align: left; }}"
+            f"#aboutLinkButton:hover {{ background: {c['avatar']}; }}"
         )
 
     def _load_avatar(self, url: str):
@@ -218,10 +257,10 @@ class BiaoTiLan(QWidget):
         layout.addStretch()
         
         # 添加工具按钮
-        settings_btn = QPushButton()
-        settings_btn.setIcon(QIcon("src/ziyuan/settings.svg"))
-        settings_btn.setToolTip("设置")
-        settings_btn.clicked.connect(self.parent._on_settings)
+        self.settings_btn = QPushButton()
+        self.settings_btn.setIcon(QIcon("src/ziyuan/settings.svg"))
+        self.settings_btn.setToolTip("设置")
+        self.settings_btn.clicked.connect(self.parent._on_settings)
         
         # 将历史记录按钮改为迷你模式按钮
         mini_mode_btn = QPushButton()
@@ -229,10 +268,10 @@ class BiaoTiLan(QWidget):
         mini_mode_btn.setToolTip("切换到迷你窗口模式")
         mini_mode_btn.clicked.connect(lambda: self.parent._toggle_mini_mode(True, show_hint=True))
         
-        theme_btn = QPushButton()
-        theme_btn.setIcon(QIcon("src/ziyuan/theme.svg"))
-        theme_btn.setToolTip("切换主题")
-        theme_btn.clicked.connect(self.parent._on_theme_change)
+        self.theme_btn = QPushButton()
+        self.theme_btn.setIcon(QIcon("src/ziyuan/theme.svg"))
+        self.theme_btn.setToolTip("切换主题")
+        self.theme_btn.clicked.connect(self.parent._on_theme_change)
         
         # 最小化按钮
         min_btn = QPushButton("一")
@@ -253,17 +292,33 @@ class BiaoTiLan(QWidget):
         close_btn.clicked.connect(self.parent.close)
         
         # 设置工具按钮大小
-        for btn in (settings_btn, mini_mode_btn, theme_btn):
+        for btn in (self.settings_btn, mini_mode_btn, self.theme_btn):
             btn.setFixedSize(28, 28)
             btn.setIconSize(QSize(16, 16))
         
         # 加载有按布局
-        layout.addWidget(settings_btn)
+        layout.addWidget(self.settings_btn)
         layout.addWidget(mini_mode_btn)
-        layout.addWidget(theme_btn)
+        layout.addWidget(self.theme_btn)
         layout.addWidget(min_btn)
         layout.addWidget(self.max_btn)
         layout.addWidget(close_btn)
+
+        self.apply_icons(self.parent.config.get("theme", "dark") if hasattr(self.parent, "config") else "dark")
+
+    def apply_icons(self, theme_name: str):
+        tone = "white" if theme_name == "dark" else "black"
+        if theme_name == "pink":
+            settings_icon = "src/ziyuan/settings-pink.svg"
+            theme_icon = "src/ziyuan/theme-pink.svg"
+        else:
+            settings_icon = f"src/ziyuan/settings-{tone}.svg"
+            theme_icon = f"src/ziyuan/theme-{tone}.svg"
+
+        if hasattr(self, "settings_btn"):
+            self.settings_btn.setIcon(QIcon(settings_icon if os.path.exists(settings_icon) else "src/ziyuan/settings.svg"))
+        if hasattr(self, "theme_btn"):
+            self.theme_btn.setIcon(QIcon(theme_icon if os.path.exists(theme_icon) else "src/ziyuan/theme.svg"))
     
     def _toggle_maximize(self):
         """切换最大化/还原状态"""

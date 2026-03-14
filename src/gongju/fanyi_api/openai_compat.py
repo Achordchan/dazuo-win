@@ -54,6 +54,9 @@ class OpenAICompatibleAPI(FanYiJieKou):
         if inspect.isawaitable(result):
             await result
 
+    async def health_check(self) -> None:
+        await self.fanyi("test", "自动检测", "简体中文")
+
     async def fanyi(self, text: str, source_lang: str, target_lang: str) -> tuple[str, Optional[str]]:
         if not text:
             return "", None

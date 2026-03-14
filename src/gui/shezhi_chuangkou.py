@@ -8,6 +8,7 @@ from .themes import ThemeManager
 from .gengxinrizhi import GengXinRiZhi
 from . import update_controller as _update_controller
 from ..shezhi import Config
+from ..shezhi.config_defaults import VENDOR_DEFAULTS
 from ..gongju.autostart import configure_autostart, apply_macos_dock_visibility
 from ..version import APP_VERSION
 import asyncio
@@ -194,36 +195,10 @@ class SheZhiChuangKou(QDialog):
         service_container.addWidget(service_help)
         service_layout.addLayout(service_container)
 
-        service_group.setLayout(service_layout)
-        translation_layout.addWidget(service_group)
-        translation_layout.addStretch()
-
-        translation_scroll = QScrollArea()
-        translation_scroll.setWidgetResizable(True)
-        translation_scroll.setObjectName("translationSettingsScroll")
-        translation_scroll.setFrameShape(QScrollArea.NoFrame)
-        translation_scroll.setWidget(translation_content)
-        tabs.addTab(translation_scroll, "翻译设置")
-
-        # 模型设置
-        model_tab = QWidget()
-        model_layout = QVBoxLayout(model_tab)
-        model_layout.setSpacing(16)
-
-        model_scroll = QScrollArea()
-        model_scroll.setWidgetResizable(True)
-        model_scroll.setObjectName("modelSettingsScroll")
-        model_scroll.setFrameShape(QScrollArea.NoFrame)
-
-        model_content = QWidget()
-        model_content.setObjectName("settingsTabContent")
-        model_content_layout = QVBoxLayout(model_content)
-        model_content_layout.setSpacing(24)
-
-        api_group = QGroupBox("模型配置")
-        api_layout = QVBoxLayout()
-        api_layout.setSpacing(22)
-        api_layout.setContentsMargins(20, 24, 20, 24)
+        self.ai_settings_group = QGroupBox("模型设置")
+        ai_layout = QVBoxLayout()
+        ai_layout.setSpacing(22)
+        ai_layout.setContentsMargins(20, 24, 20, 24)
 
         vendor_container = QVBoxLayout()
         vendor_container.setSpacing(10)
@@ -235,7 +210,7 @@ class SheZhiChuangKou(QDialog):
         vendor_container.addWidget(vendor_label)
         vendor_container.addWidget(self.vendor_combo)
         vendor_container.addWidget(vendor_help)
-        api_layout.addLayout(vendor_container)
+        ai_layout.addLayout(vendor_container)
 
         url_container = QVBoxLayout()
         url_container.setSpacing(10)
@@ -247,7 +222,7 @@ class SheZhiChuangKou(QDialog):
         url_container.addWidget(url_label)
         url_container.addWidget(self.base_url_input)
         url_container.addWidget(url_help)
-        api_layout.addLayout(url_container)
+        ai_layout.addLayout(url_container)
 
         model_container = QVBoxLayout()
         model_container.setSpacing(10)
@@ -259,7 +234,7 @@ class SheZhiChuangKou(QDialog):
         model_container.addWidget(model_label)
         model_container.addWidget(self.model_input)
         model_container.addWidget(model_help)
-        api_layout.addLayout(model_container)
+        ai_layout.addLayout(model_container)
 
         key_container = QVBoxLayout()
         key_container.setSpacing(10)
@@ -272,21 +247,26 @@ class SheZhiChuangKou(QDialog):
         key_container.addWidget(key_label)
         key_container.addWidget(self.api_key_input)
         key_container.addWidget(key_help)
-        api_layout.addLayout(key_container)
-        
-        api_group.setLayout(api_layout)
-        model_content_layout.addWidget(api_group)
-        
-        # 添加说明文本
-        note_label = QLabel("注意：Google 翻译无需 API 密钥，但需要确保网络能访问 Google 服务")
-        note_label.setProperty("help", "true")
-        note_label.setWordWrap(True)
-        model_content_layout.addWidget(note_label)
-        model_content_layout.addStretch()
+        ai_layout.addLayout(key_container)
 
-        model_scroll.setWidget(model_content)
-        model_layout.addWidget(model_scroll)
-        tabs.addTab(model_tab, "模型设置")
+        self.ai_settings_group.setLayout(ai_layout)
+        service_layout.addWidget(self.ai_settings_group)
+
+        self.translation_note_label = QLabel("注意：Google 翻译无需 API 密钥，但需要确保网络能访问 Google 服务")
+        self.translation_note_label.setProperty("help", "true")
+        self.translation_note_label.setWordWrap(True)
+        service_layout.addWidget(self.translation_note_label)
+
+        service_group.setLayout(service_layout)
+        translation_layout.addWidget(service_group)
+        translation_layout.addStretch()
+
+        translation_scroll = QScrollArea()
+        translation_scroll.setWidgetResizable(True)
+        translation_scroll.setObjectName("translationSettingsScroll")
+        translation_scroll.setFrameShape(QScrollArea.NoFrame)
+        translation_scroll.setWidget(translation_content)
+        tabs.addTab(translation_scroll, "翻译设置")
 
         layout.addWidget(tabs)
         
@@ -311,10 +291,14 @@ class SheZhiChuangKou(QDialog):
         self._load_settings()
 
         self.vendor_combo.currentTextChanged.connect(self._on_vendor_changed)
+        self.translation_api_combo.currentIndexChanged.connect(self._sync_ai_settings_visibility)
         self._current_vendor = self.vendor_combo.currentText()
     
     def _load_settings(self):
-        """加载当前设置"""
+        self._load_form_from_config()
+
+    def _load_form_from_config(self):
+        """加载当前设置。"""
         api_name = self.parent.config.get("translation.api", "google")
         if api_name == "achord":
             api_index = 0
@@ -341,6 +325,7 @@ class SheZhiChuangKou(QDialog):
             self.vendor_combo.setCurrentIndex(vendor_index)
 
         self._load_vendor_profile(vendor)
+        self._sync_ai_settings_visibility()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -375,7 +360,10 @@ class SheZhiChuangKou(QDialog):
             pass
 
     def _save_settings(self):
-        """保存设置"""
+        self._save_form_to_config()
+
+    def _save_form_to_config(self):
+        """保存设置。"""
         try:
             hotkey = ""
             if hasattr(self, "copy_hotkey_input"):
@@ -427,10 +415,7 @@ class SheZhiChuangKou(QDialog):
             self.parent.config.set("openai_compat.model", self.model_input.text().strip())
             self.parent.config.set("openai_compat.api_key", self.api_key_input.text().strip())
             
-            # 保存后重新初始化翻译 API
-            if hasattr(self.parent, '_init_translation_api'):
-                loop = asyncio.get_event_loop()
-                loop.create_task(self.parent._init_translation_api())
+            self._notify_translation_settings_changed()
             
             self.accept()
         except Exception as e:
@@ -459,40 +444,9 @@ class SheZhiChuangKou(QDialog):
         if prev_vendor and prev_vendor != vendor:
             self._save_vendor_profile(prev_vendor)
 
-        defaults = {
-            "智谱": {
-                "base_url": "https://open.bigmodel.cn/api/paas/v4",
-                "model": "glm-4-flash",
-            },
-            "OpenAI": {
-                "base_url": "https://api.openai.com/v1",
-                "model": "gpt-4o-mini",
-            },
-            "DeepSeek": {
-                "base_url": "https://api.deepseek.com",
-                "model": "",
-            },
-            "通义千问(Qwen)": {
-                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                "model": "",
-            },
-            "字节豆包": {
-                "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-                "model": "",
-            },
-            "Google Gemini": {
-                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-                "model": "",
-            },
-            "自定义": {
-                "base_url": "",
-                "model": "",
-            },
-        }
-
         # 优先加载该厂家的历史配置；没有则用预设（model 不强制填）
         if not self._load_vendor_profile(vendor):
-            d = defaults.get(vendor)
+            d = VENDOR_DEFAULTS.get(vendor)
             if d:
                 self.base_url_input.setText(d["base_url"])
                 self.model_input.setText(d["model"])
@@ -545,3 +499,23 @@ class SheZhiChuangKou(QDialog):
             "api_key": self.api_key_input.text().strip(),
         }
         self.parent.config.set("openai_compat.profiles", profiles)
+
+    def _notify_translation_settings_changed(self) -> None:
+        if hasattr(self.parent, "reload_translation_api"):
+            self.parent.reload_translation_api()
+            return
+
+        if hasattr(self.parent, '_init_translation_api'):
+            loop = asyncio.get_event_loop()
+            loop.create_task(self.parent._init_translation_api())
+
+    def _sync_ai_settings_visibility(self):
+        is_ai = self.translation_api_combo.currentIndex() == 2
+        self.ai_settings_group.setVisible(is_ai)
+
+        if self.translation_api_combo.currentIndex() == 0:
+            self.translation_note_label.setText("Achord 自研模型无需额外配置，保存后即可直接使用。")
+        elif self.translation_api_combo.currentIndex() == 1:
+            self.translation_note_label.setText("Google 翻译无需 API 密钥，但需要确保网络可以访问 Google 服务。")
+        else:
+            self.translation_note_label.setText("AI 模式需要填写模型厂家、接口地址、模型名和 API Key。")

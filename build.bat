@@ -20,6 +20,7 @@ python -m nuitka ^
     --enable-plugin=pyqt5 ^
     --include-qt-plugins=platforms,imageformats,styles ^
     --include-data-dir=src\ziyuan=src\ziyuan ^
+    --include-data-dir=src\font=src\font ^
     --include-data-dir=src\config=src\config ^
     src\main.py
 

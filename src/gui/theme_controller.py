@@ -129,6 +129,9 @@ def update_button_icons(self, theme_name):
             if hasattr(self, 'ai_status_bar') and hasattr(self.ai_status_bar, 'info_button'):
                 self.ai_status_bar.info_button.setIcon(QIcon(info_icon))
 
+        if hasattr(self, 'biaotilan') and hasattr(self.biaotilan, 'apply_icons'):
+            self.biaotilan.apply_icons(theme_name)
+
         popup = InfoTooltipPopup.get_instance()
         if hasattr(popup, 'close_button') and os.path.exists(close_icon):
             popup.close_button.setIcon(QIcon(close_icon))

@@ -1,96 +1,125 @@
-"""
-大佐翻译官主程序
-"""
+"""大佐翻译官主程序。"""
+
+import argparse
+import asyncio
+import ctypes
+import logging
 import os
 import sys
-import site
-import logging
-import ctypes
-import argparse
+from typing import Optional
+
+import qasync
+from PyQt5.QtCore import QSharedMemory, QTimer
+from PyQt5.QtGui import QFont, QFontDatabase, QIcon
 from PyQt5.QtWidgets import QApplication, QMessageBox
-from PyQt5.QtCore import QSharedMemory
+
 
 def _get_frozen_base_dir():
-    if hasattr(sys, '_MEIPASS'):
+    if hasattr(sys, "_MEIPASS"):
         return sys._MEIPASS
 
     exe_dir = os.path.dirname(sys.executable)
-    dist_dir = os.path.join(
-        exe_dir,
-        f"{os.path.splitext(os.path.basename(sys.executable))[0]}.dist",
-    )
+    dist_dir = os.path.join(exe_dir, f"{os.path.splitext(os.path.basename(sys.executable))[0]}.dist")
     if os.path.isdir(dist_dir):
         return dist_dir
     return exe_dir
 
-def get_resource_path(relative_path):
-    """获取资源文件的绝对路径"""
-    try:
-        # PyInstaller创建临时文件夹,将路径存储在_MEIPASS
-        if getattr(sys, 'frozen', False):
-            base_path = _get_frozen_base_dir()
-        else:
-            # 获取脚本所在的目录
-            base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        
-        return os.path.abspath(os.path.join(base_path, relative_path))
-    except Exception as e:
-        logging.error(f"获取资源路径失败: {e}")
-        return None
 
-# 必须在创建任何窗口之前设置应用程序ID
-if sys.platform == 'win32':
+def setup_platform_app_identity() -> None:
+    if sys.platform != "win32":
+        return
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("achord.bagayalu.translate.1.0")
-    except Exception as e:
-        print(f"设置应用程序ID失败: {e}")
+    except Exception as error:
+        print(f"设置应用程序ID失败: {error}")
 
-# 设置 Qt 插件路径
-if sys.platform == 'win32' or sys.platform == 'darwin':
+
+def setup_qt_plugin_paths() -> None:
+    if sys.platform not in {"win32", "darwin"}:
+        return
     try:
         import PyQt5
-        qt_platform_path = os.path.join(os.path.dirname(PyQt5.__file__), 'Qt5', 'plugins', 'platforms')
+
+        qt_platform_path = os.path.join(os.path.dirname(PyQt5.__file__), "Qt5", "plugins", "platforms")
         qt_plugin_path = os.path.dirname(qt_platform_path)
-        os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = qt_platform_path
-        os.environ['QT_PLUGIN_PATH'] = qt_plugin_path
+        os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = qt_platform_path
+        os.environ["QT_PLUGIN_PATH"] = qt_plugin_path
         logging.info(f"Qt platform plugin path: {qt_platform_path}")
         logging.info(f"Qt plugin path: {qt_plugin_path}")
-    except Exception as e:
-        logging.error(f"设置Qt插件路径失败: {e}")
+    except Exception as error:
+        logging.error(f"设置Qt插件路径失败: {error}")
 
-# 设置日志
-try:
-    if sys.platform == 'win32':
-        base_log_dir = os.getenv('APPDATA')
-    elif sys.platform == 'darwin':
-        base_log_dir = os.path.expanduser('~/Library/Logs')
+
+def setup_logging() -> None:
+    try:
+        if sys.platform == "win32":
+            base_log_dir = os.getenv("APPDATA")
+        elif sys.platform == "darwin":
+            base_log_dir = os.path.expanduser("~/Library/Logs")
+        else:
+            base_log_dir = os.path.expanduser("~/.cache")
+
+        log_dir = os.path.join(base_log_dir or os.path.expanduser("~"), "大佐翻译官", "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        logging.basicConfig(
+            filename=os.path.join(log_dir, "app.log"),
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s",
+        )
+    except Exception as error:
+        print(f"设置日志失败: {error}")
+
+
+def _ensure_project_paths() -> None:
+    if getattr(sys, "frozen", False):
+        project_root = _get_frozen_base_dir()
     else:
-        base_log_dir = os.path.expanduser('~/.cache')
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    log_dir = os.path.join(base_log_dir or os.path.expanduser('~'), '大佐翻译官', 'logs')
-    os.makedirs(log_dir, exist_ok=True)
-    logging.basicConfig(
-        filename=os.path.join(log_dir, 'app.log'),
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
-except Exception as e:
-    print(f"设置日志失败: {e}")
+    candidate_paths = [
+        project_root,
+        os.path.join(project_root, "src"),
+        os.path.join(project_root, "dazuofanyiguan"),
+        os.path.join(project_root, "dazuofanyiguan", "src"),
+    ]
+    for path in candidate_paths:
+        if os.path.isdir(path) and path not in sys.path:
+            sys.path.insert(0, path)
+
+    if getattr(sys, "frozen", False) and os.path.isdir(project_root):
+        try:
+            os.chdir(project_root)
+        except Exception as error:
+            logging.error(f"切换工作目录失败: {error}")
+
+
+setup_platform_app_identity()
+setup_qt_plugin_paths()
+setup_logging()
+_ensure_project_paths()
+
+from src.gui.zhuchuangkou import ZhuChuangKou
+
+
+def get_resource_path(relative_path):
+    try:
+        base_path = _get_frozen_base_dir() if getattr(sys, "frozen", False) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.abspath(os.path.join(base_path, relative_path))
+    except Exception as error:
+        logging.error(f"获取资源路径失败: {error}")
+        return None
+
 
 def check_resources():
-    """检查资源文件"""
     try:
-        resource_dir = get_resource_path('src/ziyuan')
+        resource_dir = get_resource_path("src/ziyuan")
         logging.info(f"Resource directory: {resource_dir}")
-        
         if not resource_dir or not os.path.exists(resource_dir):
             logging.error(f"Resource directory not found: {resource_dir}")
             return False
-        
-        # 检查必要的图标文件
-        required_icons = ['logo.ico', 'ai.svg', 'switch.svg', 'source.svg', 'target.svg', 'copy.svg']
+
+        required_icons = ["logo.ico", "ai.svg", "switch.svg", "source.svg", "target.svg", "copy.svg"]
         missing_icons = []
-        
         for icon in required_icons:
             icon_path = os.path.join(resource_dir, icon)
             if os.path.exists(icon_path):
@@ -98,179 +127,191 @@ def check_resources():
             else:
                 logging.error(f"Missing icon: {icon}")
                 missing_icons.append(icon)
-        
+
         if missing_icons:
             logging.error(f"Missing required icons: {', '.join(missing_icons)}")
             return False
-            
         return True
-    except Exception as e:
-        logging.error(f"检查资源文件失败: {e}")
+    except Exception as error:
+        logging.error(f"检查资源文件失败: {error}")
         return False
 
-# 将项目根目录添加到Python路径
-if getattr(sys, 'frozen', False):
-    project_root = _get_frozen_base_dir()
-else:
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-candidate_paths = [
-    project_root,
-    os.path.join(project_root, 'src'),
-    os.path.join(project_root, 'dazuofanyiguan'),
-    os.path.join(project_root, 'dazuofanyiguan', 'src'),
-]
-for path in candidate_paths:
-    if os.path.isdir(path) and path not in sys.path:
-        sys.path.insert(0, path)
-
-if getattr(sys, 'frozen', False) and os.path.isdir(project_root):
-    try:
-        os.chdir(project_root)
-    except Exception as e:
-        logging.error(f"切换工作目录失败: {e}")
-
-import asyncio
-import qasync
-from PyQt5.QtWidgets import QApplication
-from PyQt5.QtGui import QIcon
-from src.gui.zhuchuangkou import ZhuChuangKou
 
 def handle_exception(exc_type, exc_value, exc_traceback):
     logging.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
 
-# 设置未捕获异常的处理器
+
 sys.excepthook = handle_exception
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--debug', action='store_true', help='启用调试模式')
+    parser.add_argument("--debug", action="store_true", help="启用调试模式")
     return parser.parse_args()
 
-def main():
-    """主程序入口"""
+
+def hide_console_if_needed(debug: bool) -> None:
+    if debug or sys.platform != "win32":
+        return
+
+    kernel32 = ctypes.WinDLL("kernel32")
+    user32 = ctypes.WinDLL("user32")
+    hwnd = kernel32.GetConsoleWindow()
+    if hwnd:
+        user32.ShowWindow(hwnd, 0)
+
+
+def create_application() -> QApplication:
+    app = QApplication(sys.argv)
+    app.setApplicationName("大佐翻译官")
+    app.setApplicationDisplayName("大佐翻译官")
+    app.setOrganizationName("Achord")
+    app.setOrganizationDomain("github.com/Achordchan")
+    app.setQuitOnLastWindowClosed(False)
+    setup_application_fonts(app)
+    return app
+
+
+def setup_application_fonts(app: QApplication) -> None:
+    font_path = get_resource_path("src/font/PingFang SC Regular.ttf")
+    preferred_family = "PingFang SC"
+
+    if font_path and os.path.exists(font_path):
+        font_id = QFontDatabase.addApplicationFont(font_path)
+        if font_id != -1:
+            families = QFontDatabase.applicationFontFamilies(font_id)
+            if families:
+                preferred_family = families[0]
+                logging.info(f"已加载内置字体: {preferred_family}")
+        else:
+            logging.warning(f"内置字体加载失败: {font_path}")
+    else:
+        logging.warning(f"未找到内置字体文件: {font_path}")
+
+    font = QFont(preferred_family)
+    font.setWeight(QFont.Normal)
+    font.setStyleStrategy(QFont.PreferAntialias)
     try:
-        # 检查资源文件
+        font.setHintingPreference(QFont.PreferFullHinting)
+    except Exception:
+        pass
+    app.setFont(font)
+
+
+def set_application_icon(app: QApplication) -> None:
+    icon_path = get_resource_path("src/ziyuan/logo.ico")
+    if not icon_path or not os.path.exists(icon_path):
+        icon_path = get_resource_path("src/ziyuan/logo.svg")
+
+    if not icon_path or not os.path.exists(icon_path):
+        logging.error(f"Application icon not found at: {icon_path}")
+        return
+
+    try:
+        app_icon = QIcon(icon_path)
+        app.setWindowIcon(app_icon)
+        logging.info(f"Set application icon from: {icon_path}")
+
+        if sys.platform == "win32":
+            def set_taskbar_icon():
+                try:
+                    import win32gui
+
+                    hwnd = win32gui.GetForegroundWindow()
+                    if hwnd:
+                        logging.info("Skip taskbar icon WM_SETICON")
+                except Exception as error:
+                    logging.error(f"设置任务栏图标失败: {error}")
+
+            QTimer.singleShot(100, set_taskbar_icon)
+    except Exception as error:
+        logging.error(f"设置应用程序图标失败: {error}")
+
+
+def ensure_svg_support() -> None:
+    try:
+        from PyQt5.QtSvg import QSvgRenderer  # noqa: F401
+
+        logging.info("SVG support loaded")
+    except Exception as error:
+        logging.error(f"加载SVG支持失败: {error}")
+
+
+def create_async_loop(app: QApplication):
+    loop = qasync.QEventLoop(app)
+    asyncio.set_event_loop(loop)
+    return loop
+
+
+def enforce_single_instance() -> Optional[QSharedMemory]:
+    shared_memory = QSharedMemory("DaZaoFanYiGuanSingleInstance")
+    if shared_memory.create(1):
+        return shared_memory
+
+    QMessageBox.warning(
+        None,
+        "程序已在运行",
+        "大佐翻译官已经在运行中。\n\n请检查系统托盘或任务栏，或使用任务管理器查看。",
+        QMessageBox.Ok,
+    )
+    return None
+
+
+def create_main_window() -> ZhuChuangKou:
+    return ZhuChuangKou()
+
+
+def shutdown_async_resources(window: ZhuChuangKou, loop) -> None:
+    try:
+        try:
+            all_tasks = asyncio.all_tasks(loop)
+        except TypeError:
+            all_tasks = asyncio.all_tasks()
+
+        pending = [task for task in all_tasks if not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+        if hasattr(window, "fanyi") and hasattr(window.fanyi, "close_current_api"):
+            loop.run_until_complete(window.fanyi.close_current_api())
+
+        loop.run_until_complete(loop.shutdown_asyncgens())
+    except Exception as error:
+        logging.error(f"关闭翻译会话失败: {error}")
+
+
+def main():
+    args = parse_args()
+    try:
         if not check_resources():
             logging.error("资源文件检查失败，程序可能无法正常运行")
-            # 继续运行，但记录错误
-        
-        # 首先隐藏控制台
-        if not args.debug and sys.platform == 'win32':
-            kernel32 = ctypes.WinDLL('kernel32')
-            user32 = ctypes.WinDLL('user32')
-            hwnd = kernel32.GetConsoleWindow()
-            if hwnd:
-                user32.ShowWindow(hwnd, 0)  # SW_HIDE = 0
 
-        # 创建应用程序
-        app = QApplication(sys.argv)
-        
-        # 设置应用程序信息
-        app.setApplicationName("大佐翻译官")
-        app.setApplicationDisplayName("大佐翻译官")
-        app.setOrganizationName("Achord")
-        app.setOrganizationDomain("github.com/Achordchan")
-        
-        # 获取图标路径
-        icon_path = get_resource_path('src/ziyuan/logo.ico')
-        if not icon_path or not os.path.exists(icon_path):
-            icon_path = get_resource_path('src/ziyuan/logo.svg')
-        
-        if icon_path and os.path.exists(icon_path):
-            try:
-                app_icon = QIcon(icon_path)
-                app.setWindowIcon(app_icon)
-                logging.info(f"Set application icon from: {icon_path}")
-                
-                # 确保在 Windows 上设置任务栏图标
-                if sys.platform == 'win32':
-                    try:
-                        import win32gui
-                        import win32con
-                        
-                        def set_taskbar_icon():
-                            try:
-                                hwnd = win32gui.GetForegroundWindow()
-                                if hwnd:
-                                    logging.info("Skip taskbar icon WM_SETICON")
-                            except Exception as e:
-                                logging.error(f"设置任务栏图标失败: {e}")
-                        
-                        # 使用 QTimer 延迟设置图标
-                        from PyQt5.QtCore import QTimer
-                        QTimer.singleShot(100, set_taskbar_icon)
-                    except Exception as e:
-                        logging.error(f"初始化任务栏图标失败: {e}")
-            except Exception as e:
-                logging.error(f"设置应用程序图标失败: {e}")
-        else:
-            logging.error(f"Application icon not found at: {icon_path}")
-        
-        # 确保加载 SVG 支持
-        try:
-            from PyQt5.QtSvg import QSvgRenderer
-            logging.info("SVG support loaded")
-        except Exception as e:
-            logging.error(f"加载SVG支持失败: {e}")
-        
-        # 防止应用程序过早退出
-        app.setQuitOnLastWindowClosed(False)
-        
-        # 创建事件循环
-        loop = qasync.QEventLoop(app)
-        asyncio.set_event_loop(loop)
-        
-        # 创建共享内存对象用于检查是否已有实例运行
-        shared_memory = QSharedMemory('DaZaoFanYiGuanSingleInstance')
-        
-        # 尝试创建共享内存
-        if not shared_memory.create(1):
-            # 如果创建失败，说明已经有一个实例在运行
-            QMessageBox.warning(
-                None,
-                "程序已在运行",
-                "大佐翻译官已经在运行中。\n\n请检查系统托盘或任务栏，或使用任务管理器查看。",
-                QMessageBox.Ok
-            )
+        hide_console_if_needed(args.debug)
+        app = create_application()
+        set_application_icon(app)
+        ensure_svg_support()
+        loop = create_async_loop(app)
+
+        shared_memory = enforce_single_instance()
+        if shared_memory is None:
             return
-        
-        # 创建主窗口
-        window = ZhuChuangKou()
-        # 保持窗口引用
+
+        window = create_main_window()
         app.window = window
-        
-        # 显示窗口
+        app.shared_memory = shared_memory
         window.show()
-        
-        # 运行事件循环
+
         with loop:
             try:
                 loop.run_forever()
             finally:
-                try:
-                    try:
-                        all_tasks = asyncio.all_tasks(loop)
-                    except TypeError:
-                        all_tasks = asyncio.all_tasks()
-
-                    pending = [task for task in all_tasks if not task.done()]
-                    for task in pending:
-                        task.cancel()
-                    if pending:
-                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-
-                    if hasattr(window, "fanyi") and hasattr(window.fanyi, "close_current_api"):
-                        loop.run_until_complete(window.fanyi.close_current_api())
-
-                    loop.run_until_complete(loop.shutdown_asyncgens())
-                except Exception as e:
-                    logging.error(f"关闭翻译会话失败: {e}")
-            
-    except Exception as e:
-        logging.error(f"程序运行出错: {e}")
+                shutdown_async_resources(window, loop)
+    except Exception as error:
+        logging.error(f"程序运行出错: {error}")
         sys.exit(1)
 
+
 if __name__ == "__main__":
-    args = parse_args()
-    main() 
+    main()

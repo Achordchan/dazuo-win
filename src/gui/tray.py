@@ -18,17 +18,17 @@ def init_tray(self):
     
     # 添加菜单项
     show_action = self.tray_menu.addAction("显示主窗口")
-    show_action.triggered.connect(self.show)
+    show_action.triggered.connect(self.show_main_window)
     
     # 添加Mini模式切换
     self.mini_mode_action = self.tray_menu.addAction("Mini模式 (Alt+M)")
     self.mini_mode_action.setCheckable(True)
     self.mini_mode_action.setChecked(self.config.get("mini_mode", False))
-    self.mini_mode_action.triggered.connect(lambda checked: self._toggle_mini_mode(checked, show_hint=True))
+    self.mini_mode_action.triggered.connect(lambda checked: self.set_mini_mode(checked, show_hint=True))
     
     # 添加显示/隐藏Mini窗口选项
     self.toggle_mini_window_action = self.tray_menu.addAction("显示/隐藏Mini窗口 (Alt+H)")
-    self.toggle_mini_window_action.triggered.connect(self._toggle_mini_window)
+    self.toggle_mini_window_action.triggered.connect(self.toggle_mini_window)
     self.toggle_mini_window_action.setEnabled(False)  # 默认禁用
     
     # 添加Mini模式快捷键
@@ -37,7 +37,7 @@ def init_tray(self):
     
     # 添加显示/隐藏Mini窗口快捷键
     self.toggle_mini_window_shortcut = QShortcut(QKeySequence("Alt+H"), self)
-    self.toggle_mini_window_shortcut.activated.connect(self._toggle_mini_window)
+    self.toggle_mini_window_shortcut.activated.connect(self.toggle_mini_window)
     
     # 添加分隔线
     self.tray_menu.addSeparator()
@@ -53,7 +53,7 @@ def init_tray(self):
     
     # 添加退出选项
     quit_action = self.tray_menu.addAction("退出")
-    quit_action.triggered.connect(self._quit_app)
+    quit_action.triggered.connect(self.quit_application)
     
     # 设置托盘菜单样式
     self.tray_menu.setStyleSheet("""
@@ -80,7 +80,7 @@ def init_tray(self):
             color: #808080;
         }
     """)
-    
+
     # 设置托盘菜单
     self.tray_icon.setContextMenu(self.tray_menu)
     

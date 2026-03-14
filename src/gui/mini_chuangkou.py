@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout, QApplication, QSizePolicy, QLabel
+﻿from PyQt5.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout, QApplication, QSizePolicy, QLabel
 from PyQt5.QtCore import Qt, QPoint, QSize, pyqtSignal, QTimer, QRectF, QEvent
 from PyQt5.QtGui import QIcon, QPainter, QColor, QCursor, QPen, QPainterPath, QTextCursor
 import logging
@@ -249,7 +249,7 @@ class MiniChuangKou(QWidget):
                 border-radius: 3px;
                 padding: 5px;
                 font-size: 12px;
-                font-family: "Microsoft YaHei", "微软雅黑";
+                font-family: "PingFang SC", "Microsoft YaHei", "微软雅黑";
             }}
         """
         self.output_text.setStyleSheet(text_style)
@@ -835,3 +835,4 @@ class MiniChuangKou(QWidget):
     def _emit_text_changed(self):
         """发出文本变化信号"""
         self.text_changed.emit() 
+

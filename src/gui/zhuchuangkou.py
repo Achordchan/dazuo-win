@@ -59,6 +59,9 @@ from .common_widgets import FuDongAnNiu, ShuRuKuang
 from .output_widgets import ShuChuKuang, AITranslatingStatusBar, InfoTooltipPopup
 from .title_bar import BiaoTiLan
 from .tray import init_tray
+from .hotkey_controller import HotkeyController
+from .translation_panel_controller import TranslationPanelController
+from .window_mode_controller import WindowModeController
 from . import window_geometry as _window_geometry
 from . import translator_controller as _translator_controller
 from . import theme_controller as _theme_controller
@@ -125,13 +128,6 @@ class ZhuChuangKou(QMainWindow):
         self.fanyi = DaZaoFanYi()
 
         self.translator_vm = TranslatorViewModel(self.fanyi, parent=self)
-        self.translator_vm.output_text_changed.connect(self._vm_on_output_text_changed)
-        self.translator_vm.is_translating_changed.connect(self._vm_on_is_translating_changed)
-        self.translator_vm.error_message_changed.connect(self._vm_on_error_message_changed)
-        self.translator_vm.detected_source_language_changed.connect(self._vm_on_detected_source_language_changed)
-        self.translator_vm.ai_phase_changed.connect(self._vm_on_ai_phase_changed)
-        self.translator_vm.estimated_ai_tokens_changed.connect(self._vm_on_estimated_ai_tokens_changed)
-        self.translator_vm.toast_message.connect(self._vm_on_toast_message)
 
         self._latest_ai_phase_text = None
         self._latest_ai_estimated_tokens = None
@@ -162,7 +158,12 @@ class ZhuChuangKou(QMainWindow):
         
         # 创建提示框
         self.tishi = TiShiKuang(self)
-        
+
+        self.translation_panel_controller = TranslationPanelController(self)
+        self.translation_panel_controller.bind_view_model()
+        self.window_mode_controller = WindowModeController(self)
+        self.update_coordinator = _update_controller.ensure_update_coordinator(self)
+
         # 初始化拖动变量
         self._is_dragging = False
         self._drag_start_pos = None
@@ -173,18 +174,12 @@ class ZhuChuangKou(QMainWindow):
         # 初始化快捷键监听器
         default_hotkey = "command+c,c" if sys.platform == "darwin" else "ctrl+c,c"
         hotkey = self.config.get("shortcuts.copy_translate", default_hotkey)
-        self.kuaijiejian = KuaiJieJianJianTing(hotkey=hotkey)
-        self.kuaijiejian.copy_translate_triggered.connect(self._handle_copy_translate)
-
-        if sys.platform == "darwin":
-            self._prompt_macos_accessibility_if_needed()
+        self.hotkey_controller = HotkeyController(self, hotkey=hotkey)
+        self.kuaijiejian = self.hotkey_controller.hotkey_listener
+        self.clipboard_monitor = self.hotkey_controller.clipboard_monitor
 
         try:
-            if sys.platform != "darwin" or self._is_macos_accessibility_enabled():
-                self.kuaijiejian.start()
-                logger.info("成功启动快捷键监听")
-            else:
-                self.tishi.showMessage("请在系统设置启用辅助功能权限后重启应用", type="warning")
+            self.hotkey_controller.start()
         except Exception as e:
             logger.error(f"启动快捷键监听失败: {e}")
             if sys.platform == "darwin":
@@ -192,11 +187,9 @@ class ZhuChuangKou(QMainWindow):
             else:
                 self.tishi.showMessage("快捷键功能初始化失败", type="error")
 
-        self.clipboard_monitor = None
-
         # 初始化翻译API
         loop = asyncio.get_event_loop()
-        loop.create_task(self._init_translation_api())
+        self._init_translation_api_task = loop.create_task(self._init_translation_api())
         
         # 显示主窗口
         self.show()
@@ -209,7 +202,7 @@ class ZhuChuangKou(QMainWindow):
         
         # 如果配置中启用了Mini模式，则自动切换
         if self.config.get("mini_mode", False):
-            self._toggle_mini_mode(True)
+            self.set_mini_mode(True)
 
         if sys.platform == "darwin":
             app = QApplication.instance()
@@ -270,8 +263,30 @@ class ZhuChuangKou(QMainWindow):
     
     def _quit_app(self):
         """退出应用程序"""
-        self.tray_icon.hide()  # 确保在退出前隐藏托盘图标
+        self.quit_application()
+
+    def quit_application(self):
+        if hasattr(self, 'tray_icon'):
+            self.tray_icon.hide()
         QApplication.quit()
+
+    def show_main_window(self):
+        self.window_mode_controller.show_main_window()
+
+    def set_mini_mode(self, enabled: bool, show_hint: bool = True):
+        self.window_mode_controller.set_mini_mode(enabled, show_hint=show_hint)
+
+    def toggle_mini_window(self):
+        self.window_mode_controller.toggle_mini_window()
+
+    def reload_translation_api(self):
+        loop = asyncio.get_event_loop()
+        if hasattr(self, '_init_translation_api_task') and self._init_translation_api_task:
+            try:
+                self._init_translation_api_task.cancel()
+            except Exception:
+                pass
+        self._init_translation_api_task = loop.create_task(self._init_translation_api())
     
     def _create_ui(self):
         """创建界面"""
@@ -504,23 +519,10 @@ class ZhuChuangKou(QMainWindow):
         self._translate_timer.start(delay)
 
     def _get_vm_context(self) -> TranslationContext:
-        api_name = self.config.get("translation.api", "google")
-        source_lang = self.source_lang_combo.currentText().split(" (")[0]
-        target_lang = self.target_lang_combo.currentText()
-        ai_model_name = None
-        if api_name == "openai_compat":
-            ai_model_name = self.config.get("openai_compat.model")
-        return TranslationContext(
-            api_name=api_name,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            ai_model_name=ai_model_name,
-        )
+        return self.translation_panel_controller.build_context()
 
     def _vm_on_input_text_changed(self):
-        text = self.input_text.toPlainText()
-        ctx = self._get_vm_context()
-        self.translator_vm.set_input_text(text, ctx)
+        self.translation_panel_controller.on_input_text_changed()
     
     def _retry_connection(self):
         """重试连接"""
@@ -534,13 +536,6 @@ class ZhuChuangKou(QMainWindow):
         
         # 保存设置
         self.config.set("translation.target_lang", self.target_lang_combo.currentText())
-    
-    def __del__(self):
-        """析构函数，确保关闭所有会话"""
-        if hasattr(self, 'fanyi'):
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(self.fanyi.close_current_api())
     
     def mousePressEvent(self, event):
         """鼠标按下事件"""
@@ -621,8 +616,11 @@ class ZhuChuangKou(QMainWindow):
                 logger.info("设置已保存，重新加载设置")
                 default_hotkey = "command+c,c" if sys.platform == "darwin" else "ctrl+c,c"
                 hotkey = self.config.get("shortcuts.copy_translate", default_hotkey)
-                if hasattr(self, "kuaijiejian"):
-                    self.kuaijiejian.set_hotkey(hotkey)
+                if hasattr(self, "hotkey_controller"):
+                    self.hotkey_controller.reload_hotkey(hotkey)
+
+                theme_name = self.config.get("theme", "dark")
+                self._apply_theme(theme_name)
                 self._update_service_display()
                 
                 # 重新加载翻译设置
@@ -639,8 +637,7 @@ class ZhuChuangKou(QMainWindow):
                     self.target_lang_combo.setCurrentIndex(target_index)
                 
                 # 重新初始化翻译API
-                loop = asyncio.get_event_loop()
-                loop.create_task(self._init_translation_api())
+                self.reload_translation_api()
                 
                 # 如果Mini窗口存在，更新其大小和透明度
                 if self.mini_window:
@@ -798,12 +795,7 @@ class ZhuChuangKou(QMainWindow):
 
     def _show_main_window(self):
         """显示并激活主窗口（避免macOS下无响应）"""
-        if self.isHidden():
-            self.showNormal()
-        else:
-            self.show()
-        self.raise_()
-        self.activateWindow()
+        self.show_main_window()
 
     def _on_tray_icon_activated(self, reason):
         """处理托盘图标的激活事件"""
@@ -843,145 +835,35 @@ class ZhuChuangKou(QMainWindow):
 
     def _handle_copy_translate(self):
         """处理复制后翻译的快捷键"""
-        now = time.monotonic()
-        # 避免与剪贴板双复制监听重复触发
-        if now - getattr(self, '_last_copy_trigger_time', 0.0) < 0.35:
-            return
-        self._last_copy_trigger_time = now
-
-        text = pyperclip.paste().strip()
-        if not text:
-            self.tishi.showMessage("剪贴板为空", type="warning")
-            return
-            
-        # 不论窗口状态如何，只要不是迷你模式，就确保主窗口显示并位于前台
-        if not self.config.get("mini_mode", False):
-            # 恢复窗口并激活
-            self.showNormal()
-            self.raise_()
-            self.activateWindow()
-            logger.info("通过快捷键激活主窗口")
-            
-        if self.config.get("mini_mode", False):
-            # 如果启用了迷你模式，则在迷你窗口中显示翻译
-            if not hasattr(self, 'mini_window') or not self.mini_window:
-                # 初始化迷你窗口
-                self.mini_window = MiniChuangKou(self)
-                
-            # 直接使用翻译和显示方法
-            asyncio.ensure_future(self._translate_and_show_mini(text))
-        else:
-            # 正常模式，在主窗口中显示翻译
-            self.input_text.setPlainText(text)
-            self.translator_vm.translate_now(text, self._get_vm_context())
+        self.window_mode_controller.handle_copy_translate()
 
     def _handle_double_copy_text(self, text: str):
-        now = time.monotonic()
-        if now - getattr(self, '_last_copy_trigger_time', 0.0) < 0.35:
-            return
-        self._last_copy_trigger_time = now
-
-        if not text or not text.strip():
-            if hasattr(self, 'tishi'):
-                self.tishi.showMessage("剪贴板为空", type="warning")
-            return
-
-        if not self.config.get("mini_mode", False):
-            self.showNormal()
-            self.raise_()
-            self.activateWindow()
-
-        if self.config.get("mini_mode", False):
-            if not hasattr(self, 'mini_window') or not self.mini_window:
-                self.mini_window = MiniChuangKou(self)
-            asyncio.ensure_future(self._translate_and_show_mini(text))
-            return
-
-        self.input_text.setPlainText(text)
-        self.translator_vm.translate_now(text, self._get_vm_context())
+        self.window_mode_controller.handle_double_copy_text(text)
 
     def _start_translation(self):
         """开始翻译"""
-        self.translator_vm.translate_now(self.input_text.toPlainText(), self._get_vm_context())
+        self.translation_panel_controller.start_translation()
 
     def _vm_on_output_text_changed(self, text: str):
-        self.output_text.stop_loading()
-        self.output_text.setPlainText(text or "")
-        self.switch_button.setEnabled(bool((text or "").strip()))
-
-        if not (text or "").strip():
-            self.output_text.clear_ai_info()
-            return
-
-        if self.config.get("translation.api", "google") != "openai_compat":
-            self.output_text.clear_ai_info()
-            return
-
-        model, duration_ms, estimated_tokens = self.translator_vm.get_last_ai_info()
-        if model and duration_ms is not None:
-            self.output_text.set_ai_info(model=model, duration_ms=duration_ms, estimated_tokens=estimated_tokens)
-        else:
-            self.output_text.clear_ai_info()
+        self.translation_panel_controller.on_output_text_changed(text)
 
     def _vm_on_is_translating_changed(self, translating: bool):
-        if translating:
-            self.output_text.start_loading()
-            self.output_text.clear_ai_info()
-            self.status_indicator.set_status("normal", "正在翻译...")
-
-            if self.config.get("translation.api", "google") == "openai_compat":
-                model = self.config.get("openai_compat.model")
-                self.ai_status_bar.set_context(model=model, phase=self._latest_ai_phase_text, estimated_tokens=self._latest_ai_estimated_tokens)
-                self.ai_status_bar.start()
-            else:
-                self.ai_status_bar.stop()
-            return
-
-        self.output_text.stop_loading()
-        self.status_indicator.set_status("normal")
-        self.ai_status_bar.stop()
+        self.translation_panel_controller.on_is_translating_changed(translating)
 
     def _vm_on_error_message_changed(self, message):
-        if message:
-            self.output_text.stop_loading()
-            self.switch_button.setEnabled(False)
-            self.status_indicator.set_status("error", str(message))
-            return
-
-        self.status_indicator.set_status("normal")
+        self.translation_panel_controller.on_error_message_changed(message)
 
     def _vm_on_detected_source_language_changed(self, detected_lang):
-        if not detected_lang:
-            self._reset_source_lang_text()
-            return
-
-        try:
-            lang_map = {v: k for k, v in self.fanyi._fanyi_jiekou.LANG_CODES.items()}
-            detected_name = lang_map.get(detected_lang, detected_lang)
-            self._detected_lang = detected_lang
-            self._detected_lang_text = f"自动检测 ({detected_name})"
-            self.source_lang_combo.setItemText(0, self._detected_lang_text)
-        except Exception as e:
-            logger.error(f"更新语言检测显示失败: {e}")
+        self.translation_panel_controller.on_detected_source_language_changed(detected_lang)
 
     def _vm_on_ai_phase_changed(self, phase):
-        self._latest_ai_phase_text = str(phase) if phase else None
-        if phase:
-            self.status_indicator.set_status("normal", str(phase))
-
-        if self.config.get("translation.api", "google") == "openai_compat" and getattr(self, 'ai_status_bar', None):
-            model = self.config.get("openai_compat.model")
-            self.ai_status_bar.set_context(model=model, phase=self._latest_ai_phase_text, estimated_tokens=self._latest_ai_estimated_tokens)
+        self.translation_panel_controller.on_ai_phase_changed(phase)
 
     def _vm_on_estimated_ai_tokens_changed(self, estimated):
-        self._latest_ai_estimated_tokens = estimated
-        if self.config.get("translation.api", "google") == "openai_compat" and getattr(self, 'ai_status_bar', None):
-            model = self.config.get("openai_compat.model")
-            self.ai_status_bar.set_context(model=model, phase=self._latest_ai_phase_text, estimated_tokens=self._latest_ai_estimated_tokens)
+        self.translation_panel_controller.on_estimated_ai_tokens_changed(estimated)
 
     def _vm_on_toast_message(self, message: str, toast_type: str):
-        if hasattr(self, 'tishi'):
-            self.tishi.showMessage(message, type=toast_type)
+        self.translation_panel_controller.on_toast_message(message, toast_type)
 
     def closeEvent(self, event):
         """窗口关闭事件"""
@@ -999,19 +881,24 @@ class ZhuChuangKou(QMainWindow):
         if self.mini_window:
             self.mini_window.close()
 
-        if hasattr(self, 'clipboard_monitor') and self.clipboard_monitor:
+        if hasattr(self, 'hotkey_controller') and self.hotkey_controller:
             try:
-                self.clipboard_monitor.stop()
+                self.hotkey_controller.stop()
             except Exception:
                 pass
 
         if hasattr(self, '_save_window_geometry'):
             self._save_window_geometry()
 
-        if hasattr(self, 'fanyi') and hasattr(self.fanyi, 'close_current_api'):
+        if hasattr(self, 'translator_vm'):
             try:
-                loop = asyncio.get_event_loop()
-                loop.create_task(self.fanyi.close_current_api())
+                self.translator_vm.cancel(clear_output=False)
+            except Exception:
+                pass
+
+        if hasattr(self, '_init_translation_api_task') and self._init_translation_api_task:
+            try:
+                self._init_translation_api_task.cancel()
             except Exception:
                 pass
 
@@ -1026,7 +913,7 @@ class ZhuChuangKou(QMainWindow):
         super().showEvent(event)
         # 当主窗口显示时，关闭Mini模式
         if self.is_mini_mode:
-            self._toggle_mini_mode(False)
+            self.set_mini_mode(False)
     
     async def _handle_mini_text_changed(self):
         """处理Mini窗口的文本变化"""
@@ -1070,136 +957,26 @@ class ZhuChuangKou(QMainWindow):
             self.mini_window.output_text.setPlainText("翻译失败，请重试")
     
     def _toggle_mini_mode(self, checked, show_hint=True):
-        """切换Mini模式
-        
-        参数:
-            checked: 是否启用迷你模式
-            show_hint: 是否显示切换提示，默认为True
-        """
-        self.is_mini_mode = checked
-        
-        if checked:
-            # 初始化Mini窗口但不显示
-            if not hasattr(self, "mini_window") or not self.mini_window:
-                self.mini_window = MiniChuangKou(self)
-            
-            # 切换到Mini模式时只隐藏主窗口，不显示Mini窗口
-            self.hide()
-            
-            # 只有在手动切换时才显示提示（show_hint=True）
-            if show_hint:
-                self._show_mini_mode_hint()
-            
-            logger.info("已切换到Mini模式（窗口隐藏）")
-        else:
-            # 关闭Mini窗口，显示主窗口
-            if hasattr(self, "mini_window") and self.mini_window:
-                self.mini_window.hide()
-            
-            # 显示主窗口
-            self.show()
-            self.activateWindow()
-            logger.info("已切换到正常模式")
-        
-        # 更新托盘菜单的选中状态
-        self.mini_mode_action.setChecked(checked)
-        
-        # 保存设置
-        self.config.set("mini_mode", checked)
-        self.config.save()
+        self.set_mini_mode(checked, show_hint=show_hint)
     
     def _show_mini_mode_hint(self):
-        """显示迷你模式切换提示"""
-        try:
-            # 创建一个独立的顶层窗口作为提示
-            hint = QFrame(None)
-            hint.setWindowFlags(
-                Qt.FramelessWindowHint | 
-                Qt.WindowStaysOnTopHint | 
-                Qt.Tool |
-                Qt.X11BypassWindowManagerHint  # 确保在所有平台上都能显示在最顶层
-            )
-            hint.setAttribute(Qt.WA_TranslucentBackground)
-            hint.setAttribute(Qt.WA_ShowWithoutActivating)
-            
-            # 设置边框样式
-            hint.setFrameShape(QFrame.StyledPanel)
-            hint.setStyleSheet("""
-                QFrame {
-                    background-color: rgba(40, 167, 69, 0.9);
-                    border-radius: 20px;
-                    border: 1px solid rgba(40, 167, 69, 1.0);
-                }
-            """)
-            
-            # 创建布局
-            layout = QVBoxLayout(hint)
-            layout.setContentsMargins(15, 10, 15, 10)
-            
-            # 创建标签
-            msg_label = QLabel("已切换到迷你窗口模式")
-            msg_label.setStyleSheet("""
-                color: white;
-                font-size: 14px;
-                font-weight: bold;
-            """)
-            msg_label.setAlignment(Qt.AlignCenter)
-            layout.addWidget(msg_label)
-            
-            # 计算显示位置 - 屏幕中央偏下
-            screen = QApplication.desktop().screenGeometry()
-            hint_width = 240
-            hint_height = 60
-            x = (screen.width() - hint_width) // 2
-            y = int(screen.height() * 0.75)
-            
-            hint.setGeometry(x, y, hint_width, hint_height)
-            
-            # 强制显示并置于顶层
-            hint.show()
-            hint.raise_()
-            
-            # 添加淡出动画效果
-            def fade_out_and_close():
-                """创建淡出效果并关闭提示窗口"""
-                animation = QPropertyAnimation(hint, b"windowOpacity")
-                animation.setDuration(500)  # 500毫秒淡出
-                animation.setStartValue(1.0)
-                animation.setEndValue(0.0)
-                animation.finished.connect(hint.deleteLater)  # 动画结束后删除窗口
-                animation.start()
-            
-            # 2秒后开始淡出
-            QTimer.singleShot(2000, fade_out_and_close)
-            
-            logger.info("显示迷你模式切换提示")
-        except Exception as e:
-            logger.error(f"显示迷你模式切换提示失败: {e}")
-            logger.exception("详细错误信息")  # 记录详细的错误堆栈信息
+        self.window_mode_controller.show_mini_mode_hint()
     
     def _toggle_mini_mode_shortcut(self):
         """通过快捷键切换Mini模式"""
         # 不论窗口状态如何，只要不是迷你模式，就确保主窗口显示并位于前台
         if not self.is_mini_mode:
-            self.showNormal()
-            self.raise_()
-            self.activateWindow()
+            self.show_main_window()
             logger.info("通过模式切换快捷键激活主窗口")
             return
         
         # 切换模式
         self.mini_mode_action.setChecked(not self.mini_mode_action.isChecked())
-        self._toggle_mini_mode(self.mini_mode_action.isChecked())
+        self.set_mini_mode(self.mini_mode_action.isChecked())
     
     def _toggle_mini_window(self):
         """切换Mini窗口的显示/隐藏状态"""
-        if self.is_mini_mode and self.mini_window:
-            if self.mini_window.isVisible():
-                self.mini_window.hide()
-                logger.info("隐藏Mini窗口")
-            else:
-                self.mini_window.show_at_cursor()
-                logger.info("显示Mini窗口")
+        self.toggle_mini_window()
 
     def _on_theme_changed(self, theme_name):
         """处理主题变化"""
@@ -1258,62 +1035,7 @@ class ZhuChuangKou(QMainWindow):
                 pass
 
     async def _translate_and_show_mini(self, text_to_translate, service=None):
-        """在Mini窗口中翻译并显示文本"""
-        try:
-            # 确保Mini窗口已初始化
-            if not hasattr(self, "mini_window") or not self.mini_window:
-                self.mini_window = MiniChuangKou(self)
-                
-            # 先确保窗口处于初始状态 - 重置大小和内容
-            self.mini_window.resize(300, 60)
-            self.mini_window.output_text.clear()  # 使用clear更彻底清空内容
-            
-            # 显示窗口并开始加载
-            self.mini_window.show_at_cursor()
-            self.mini_window.start_loading()
-            
-            # 记录当前翻译的文本
-            current_translation_text = text_to_translate
-            logger.info(f"开始翻译: '{text_to_translate[:20]}...'")
-                
-            # 使用指定的服务或默认服务翻译
-            service = service or self.config.get('default_service', 'google')
-                
-            # 执行翻译
-            translation_result = await self.fanyi.fanyi(
-                text_to_translate, 
-                source_lang="auto",
-                target_lang=self.target_lang_combo.currentText()
-            )
-                
-            # 翻译结果处理 - 从元组中提取文本内容
-            if isinstance(translation_result, tuple):
-                # 元组形式的结果，取第一个元素作为翻译文本
-                translation_text = translation_result[0]
-                logger.info(f"翻译结果为元组: {translation_result}")
-            else:
-                # 字符串形式的结果，直接使用
-                translation_text = translation_result
-                
-            if not translation_text:
-                # 翻译失败，显示错误
-                self.mini_window.stop_loading()
-                self.mini_window.output_text.setText("翻译失败，请重试")
-                return
-                
-            # 显示翻译结果
-            self.mini_window.stop_loading()
-            self.mini_window.output_text.setText(translation_text)
-            
-            # 确保窗口大小适应内容
-            self.mini_window._adjust_window_size_for_text(translation_text)
-                
-            logger.info(f"Mini窗口已显示翻译结果: '{current_translation_text[:20]}...' -> '{translation_text[:20]}...'")
-        except Exception as e:
-            logger.error(f"Mini窗口翻译失败: {e}")
-            if hasattr(self, "mini_window") and self.mini_window:
-                self.mini_window.stop_loading()
-                self.mini_window.output_text.setText(f"翻译失败: {str(e)}")
+        await self.window_mode_controller.translate_and_show_mini(text_to_translate, service=service)
 
     def _load_config(self):
         """加载配置"""

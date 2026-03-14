@@ -23,11 +23,20 @@ if os.path.exists(src_config_dir):
         dest_path = os.path.join('src', 'config')
         config_files.append((file, dest_path))
 
+# 收集字体文件
+font_files = []
+src_font_dir = os.path.join(current_dir, 'src', 'font')
+if os.path.exists(src_font_dir):
+    for file in glob(os.path.join(src_font_dir, '*.*')):
+        dest_path = os.path.join('src', 'font')
+        font_files.append((file, dest_path))
+
 print("Resource files to be included:", resource_files)
 print("Config files to be included:", config_files)
+print("Font files to be included:", font_files)
 
 # 合并所有数据文件
-all_data_files = resource_files + config_files
+all_data_files = resource_files + config_files + font_files
 
 a = Analysis(
     ['src/main.py'],

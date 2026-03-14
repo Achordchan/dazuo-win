@@ -1,10 +1,10 @@
-"""
+﻿"""
 应用程序样式表 - 深色主题
 """
 
 MAIN_STYLE = """
 QWidget {
-    font-family: "Microsoft YaHei", "Segoe UI", "Helvetica";
+    font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", "Helvetica";
 }
 
 QMainWindow {
@@ -90,3 +90,4 @@ BiaoTiLan QPushButton:pressed {
     background: rgba(255, 255, 255, 0.2);
 }
 """ 
+

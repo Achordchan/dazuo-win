@@ -1,11 +1,11 @@
-"""
+﻿"""
 深色主题样式表
 """
 
 STYLE = """
 QWidget {
     color: #FFFFFF;
-    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
     font-size: 14px;
 }
 
@@ -17,7 +17,7 @@ QTextEdit {
     font-size: 16px;
     line-height: 1.8;
     color: #FFFFFF;
-    font-family: "Microsoft YaHei", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+    font-family: "PingFang SC", "Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif;
     letter-spacing: 0.4px;
     selection-background-color: #0A84FF;
     selection-color: #FFFFFF;
@@ -29,7 +29,7 @@ QTextEdit:focus {
 }
 
 QTextEdit[readOnly="true"] {
-    font-family: "Microsoft YaHei", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+    font-family: "PingFang SC", "Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif;
     color: #E8E8E8;
     font-size: 16px;
     line-height: 1.8;
@@ -45,7 +45,7 @@ QPushButton {
     font-size: 15px;
     font-weight: 500;
     min-width: 80px;
-    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
     letter-spacing: 0.3px;
 }
 
@@ -64,7 +64,7 @@ QComboBox {
     min-width: 150px;
     background-color: #2D2D2D;
     color: #FFFFFF;
-    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
     font-size: 15px;
     letter-spacing: 0.2px;
 }
@@ -96,7 +96,7 @@ QComboBox QAbstractItemView {
     padding: 4px;
     selection-background-color: #0A84FF;
     selection-color: #FFFFFF;
-    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
     font-size: 15px;
 }
 
@@ -104,7 +104,7 @@ QLabel {
     color: #FFFFFF;
     font-size: 15px;
     padding: 4px 0;
-    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
     letter-spacing: 0.2px;
 }
 
@@ -477,7 +477,7 @@ QPushButton[toolTip="还原"] {
     background: transparent;
     border: none;
     color: #CCCCCC;
-    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
     font-size: 16px;
     padding: 0;
     min-width: 32px;
@@ -500,7 +500,7 @@ QPushButton[toolTip="关闭"] {
     background: transparent;
     border: none;
     color: #CCCCCC;
-    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
     font-size: 16px;
     padding: 0;
     min-width: 32px;
@@ -516,3 +516,4 @@ QPushButton[toolTip="关闭"]:pressed {
     color: white;
 }
 """ 
+

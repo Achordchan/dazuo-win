@@ -1,0 +1,44 @@
+import logging
+import sys
+
+from ..gongju.kuaijiejian import ClipboardDoubleCopyMonitor, KuaiJieJianJianTing
+
+logger = logging.getLogger(__name__)
+
+
+class HotkeyController:
+    def __init__(self, main_window, hotkey: str):
+        self.main_window = main_window
+        self.hotkey_listener = KuaiJieJianJianTing(hotkey=hotkey)
+        self.hotkey_listener.copy_translate_triggered.connect(self.main_window._handle_copy_translate)
+
+        self.clipboard_monitor = ClipboardDoubleCopyMonitor(main_window)
+        self.clipboard_monitor.double_copy_detected.connect(self.main_window._handle_double_copy_text)
+
+    def start(self) -> None:
+        if sys.platform == "darwin":
+            self.main_window._prompt_macos_accessibility_if_needed()
+
+        if sys.platform != "darwin" or self.main_window._is_macos_accessibility_enabled():
+            self.hotkey_listener.start()
+            logger.info("成功启动快捷键监听")
+            return
+
+        self.main_window.tishi.showMessage("请在系统设置启用辅助功能权限后重启应用", type="warning")
+
+    def stop(self) -> None:
+        try:
+            self.hotkey_listener.stop()
+        except Exception as error:
+            logger.error(f"停止快捷键监听失败: {error}")
+
+        try:
+            self.clipboard_monitor.stop()
+        except Exception as error:
+            logger.error(f"停止剪贴板监听失败: {error}")
+
+    def reload_hotkey(self, hotkey: str) -> None:
+        self.hotkey_listener.set_hotkey(hotkey)
+
+    def start_clipboard_monitor(self) -> None:
+        self.clipboard_monitor.start()
