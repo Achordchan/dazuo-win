@@ -1,23 +1,18 @@
 import logging
 logger = logging.getLogger(__name__)
 
-import os
-
 from PyQt5.QtWidgets import QPushButton, QTextEdit
 from PyQt5.QtCore import Qt, QSize, QPropertyAnimation, QEasingCurve, QMimeData
-from PyQt5.QtGui import QIcon
+
+from .dialog_utils import build_menu_stylesheet
+from .icon_provider import themed_icon
 
 
 class FuDongAnNiu(QPushButton):
     """浮动按钮类"""
     def __init__(self, icon_path, tooltip="", parent=None):
         super().__init__(parent)
-        logger.info(f"Loading icon from: {icon_path}")
-        if os.path.exists(icon_path):
-            self.setIcon(QIcon(icon_path))
-            logger.info(f"Successfully loaded icon: {icon_path}")
-        else:
-            logger.warning(f"Icon not found: {icon_path}")
+        self.setIcon(themed_icon("copy"))
         self.setToolTip(tooltip)
         self.setFixedSize(28, 28)
         self.setIconSize(QSize(16, 16))
@@ -79,30 +74,7 @@ class ShuRuKuang(QTextEdit):
                 if "大佐翻译官" in text or "作者" in text:
                     action.setEnabled(False)
         
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #2D2D2D;
-                border: 1px solid #404040;
-                border-radius: 4px;
-                padding: 4px;
-            }
-            QMenu::item {
-                padding: 6px 24px;
-                border-radius: 4px;
-                color: #FFFFFF;
-            }
-            QMenu::item:selected {
-                background-color: #404040;
-            }
-            QMenu::separator {
-                height: 1px;
-                background-color: #404040;
-                margin: 4px 0px;
-            }
-            QMenu::item:disabled {
-                color: #808080;
-            }
-        """)
+        menu.setStyleSheet(build_menu_stylesheet(self))
         
         # 连接菜单项动作
         menu.triggered.connect(lambda action: self._handle_menu_action(action.text()))

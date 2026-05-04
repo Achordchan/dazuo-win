@@ -2,6 +2,8 @@ from PyQt5.QtWidgets import QLabel
 from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QPoint, QRectF
 from PyQt5.QtGui import QPainter, QPainterPath, QColor
 
+from .dialog_utils import get_dialog_palette, get_theme_key
+
 class TiShiKuang(QLabel):
     """自定义提示框"""
     def __init__(self, parent=None):
@@ -56,17 +58,26 @@ class TiShiKuang(QLabel):
         self.animation.setEndValue(end_pos)
         
         # 根据类型设置样式
+        palette = get_dialog_palette(self.parent)
+        theme_key = get_theme_key(self.parent)
         colors = {
-            "info": "#2D2D2D",
-            "success": "#28a745",
-            "warning": "#ffc107",
-            "error": "#dc3545"
+            "info": palette.surface,
+            "success": palette.progress_start,
+            "warning": "#F4B740",
+            "error": "#DC3545",
+        }
+        text_colors = {
+            "info": palette.text,
+            "success": "#FFFFFF",
+            "warning": "#3A2A00" if theme_key != "dark" else "#1F1600",
+            "error": "#FFFFFF",
         }
         color = colors.get(type, colors["info"])
+        text_color = text_colors.get(type, palette.text)
         
         self.setStyleSheet(f"""
             QLabel {{
-                color: white;
+                color: {text_color};
                 padding: 10px 20px;
                 border-radius: 4px;
                 background: {color};
@@ -94,4 +105,4 @@ class TiShiKuang(QLabel):
         painter.setClipPath(path)
         
         # 调用父类绘制
-        super().paintEvent(event) 
+        super().paintEvent(event)

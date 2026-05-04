@@ -10,8 +10,11 @@ from typing import Optional
 
 import qasync
 from PyQt5.QtCore import QSharedMemory, QTimer
-from PyQt5.QtGui import QFont, QFontDatabase, QIcon
+from PyQt5.QtGui import QFont, QIcon
 from PyQt5.QtWidgets import QApplication, QMessageBox
+
+from src.gui.dialog_utils import build_dialog_stylesheet_for_theme
+from src.shezhi import Config
 
 
 def _get_frozen_base_dir():
@@ -173,26 +176,14 @@ def create_application() -> QApplication:
 
 
 def setup_application_fonts(app: QApplication) -> None:
-    font_path = get_resource_path("src/font/PingFang SC Regular.ttf")
-    preferred_family = "PingFang SC"
-
-    if font_path and os.path.exists(font_path):
-        font_id = QFontDatabase.addApplicationFont(font_path)
-        if font_id != -1:
-            families = QFontDatabase.applicationFontFamilies(font_id)
-            if families:
-                preferred_family = families[0]
-                logging.info(f"已加载内置字体: {preferred_family}")
-        else:
-            logging.warning(f"内置字体加载失败: {font_path}")
-    else:
-        logging.warning(f"未找到内置字体文件: {font_path}")
+    preferred_family = "SimHei" if sys.platform == "win32" else "Heiti SC"
+    logging.info(f"使用系统字体: {preferred_family}")
 
     font = QFont(preferred_family)
     font.setWeight(QFont.Normal)
-    font.setStyleStrategy(QFont.PreferAntialias)
+    font.setStyleStrategy(QFont.PreferAntialias | QFont.PreferQuality)
     try:
-        font.setHintingPreference(QFont.PreferFullHinting)
+        font.setHintingPreference(QFont.PreferDefaultHinting)
     except Exception:
         pass
     app.setFont(font)
@@ -248,12 +239,18 @@ def enforce_single_instance() -> Optional[QSharedMemory]:
     if shared_memory.create(1):
         return shared_memory
 
-    QMessageBox.warning(
-        None,
-        "程序已在运行",
-        "大佐翻译官已经在运行中。\n\n请检查系统托盘或任务栏，或使用任务管理器查看。",
-        QMessageBox.Ok,
-    )
+    message_box = QMessageBox()
+    message_box.setWindowTitle("程序已在运行")
+    message_box.setText("大佐翻译官已经在运行中。")
+    message_box.setInformativeText("请检查系统托盘或任务栏，或使用任务管理器查看。")
+    message_box.setIcon(QMessageBox.Warning)
+    message_box.setStandardButtons(QMessageBox.Ok)
+    try:
+        theme_key = Config().get("theme", "dark")
+    except Exception:
+        theme_key = "dark"
+    message_box.setStyleSheet(build_dialog_stylesheet_for_theme(theme_key))
+    message_box.exec_()
     return None
 
 

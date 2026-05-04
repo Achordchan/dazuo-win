@@ -32,8 +32,6 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Nuitka 运行时依赖与资源（含主程序）
 Source: "dist_nuitka\main.dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-[Fonts]
-FontInstall: "PingFang SC"; Source: "{app}\src\font\PingFang SC Regular.ttf"; Flags: onlyifdoesntexist uninsneveruninstall
 ; 确保配置目录存在
 [Dirs]
 Name: "{app}\src\config"; Flags: uninsalwaysuninstall

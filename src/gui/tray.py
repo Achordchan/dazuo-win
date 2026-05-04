@@ -6,6 +6,8 @@ import os
 from PyQt5.QtWidgets import QMenu, QSystemTrayIcon, QShortcut
 from PyQt5.QtGui import QIcon, QKeySequence
 
+from .dialog_utils import build_menu_stylesheet
+
 
 def init_tray(self):
     # 创建系统托盘图标
@@ -56,30 +58,7 @@ def init_tray(self):
     quit_action.triggered.connect(self.quit_application)
     
     # 设置托盘菜单样式
-    self.tray_menu.setStyleSheet("""
-        QMenu {
-            background-color: #2D2D2D;
-            border: 1px solid #404040;
-            border-radius: 4px;
-            padding: 4px;
-        }
-        QMenu::item {
-            padding: 6px 24px;
-            border-radius: 4px;
-            color: #FFFFFF;
-        }
-        QMenu::item:selected {
-            background-color: #404040;
-        }
-        QMenu::separator {
-            height: 1px;
-            background-color: #404040;
-            margin: 4px 0px;
-        }
-        QMenu::item:disabled {
-            color: #808080;
-        }
-    """)
+    self.tray_menu.setStyleSheet(build_menu_stylesheet(self))
 
     # 设置托盘菜单
     self.tray_icon.setContextMenu(self.tray_menu)

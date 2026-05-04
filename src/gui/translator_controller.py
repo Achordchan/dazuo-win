@@ -11,8 +11,8 @@ def update_service_display(self):
     if api_name == "openai_compat":
         vendor = self.config.get("openai_compat.vendor", "OpenAI")
         self.service_display.setText(f"{vendor}")
-    elif api_name == "achord":
-        self.service_display.setText("Achord自研模型")
+    elif api_name == "deepl":
+        self.service_display.setText("DeepL")
     else:
         self.service_display.setText("Google")
 
@@ -36,7 +36,7 @@ async def _init_translation_api(self):
         api_name = self.config.get("translation.api", "google")
         logger.info(f"正在初始化翻译API: {api_name}")
 
-        self.status_indicator.set_status("normal", "正在连接...")
+        self.status_indicator.set_status("connecting", "正在连接...")
         update_service_display(self)
 
         if hasattr(self, "translator_vm"):

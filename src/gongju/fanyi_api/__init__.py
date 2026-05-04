@@ -3,7 +3,7 @@
 """
 from .google import GoogleAPI
 from .openai_compat import OpenAICompatibleAPI
-from .achord import AchordAPI
+from .deepl import DeepLAPI
 
 # 导出所有翻译接口
-__all__ = ['GoogleAPI', 'OpenAICompatibleAPI', 'AchordAPI']
+__all__ = ['GoogleAPI', 'OpenAICompatibleAPI', 'DeepLAPI']

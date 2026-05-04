@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from .dialog_utils import apply_dialog_theme, show_themed_message
 from .gengxinrizhi import GengXinRiZhi
 from ..gongju.update import Updater
 from ..version import APP_VERSION
@@ -72,18 +73,7 @@ class UpdatePromptDialog(QDialog):
         layout.addWidget(notes_box)
         layout.addLayout(action_row)
 
-        self.setStyleSheet(
-            "QDialog { background: #f6f8fb; }"
-            "#updateTitle { font-size: 18px; font-weight: 600; color: #1f2a37; }"
-            "#updateSubtitle { font-size: 12px; color: #6b7280; }"
-            "#updateSection { font-size: 12px; color: #374151; margin-top: 6px; }"
-            "#updateNotes { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 10px;"
-            " padding: 10px; font-size: 12px; color: #374151; }"
-            "#updateCancel { background: #e5e7eb; color: #374151; border-radius: 8px; padding: 6px 16px; }"
-            "#updateCancel:hover { background: #d1d5db; }"
-            "#updateOk { background: #1f7ae0; color: #ffffff; border-radius: 8px; padding: 6px 18px; }"
-            "#updateOk:hover { background: #1768bd; }"
-        )
+        apply_dialog_theme(self, parent)
 
 
 class UpdateProgressDialog(QDialog):
@@ -112,14 +102,7 @@ class UpdateProgressDialog(QDialog):
         layout.addWidget(subtitle)
         layout.addWidget(self.progress_bar)
 
-        self.setStyleSheet(
-            "QDialog { background: #f6f8fb; }"
-            "#progressTitle { font-size: 16px; font-weight: 600; color: #1f2a37; }"
-            "#progressSubtitle { font-size: 12px; color: #6b7280; }"
-            "#progressBar { height: 14px; border-radius: 7px; background: #e5e7eb; }"
-            "#progressBar::chunk { border-radius: 7px; background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-            " stop:0 #18a058, stop:1 #1f7ae0); }"
-        )
+        apply_dialog_theme(self, parent)
 
     def set_progress(self, value: int):
         self.progress_bar.setValue(value)
@@ -207,11 +190,12 @@ class UpdateCoordinator:
             return
 
         if force_update:
-            QMessageBox.critical(
+            show_themed_message(
                 self.owner,
-                "必须更新",
-                "此版本为重要更新，未更新将退出程序。",
-                QMessageBox.Ok,
+                icon=QMessageBox.Critical,
+                title="必须更新",
+                text="此版本为重要更新，未更新将退出程序。",
+                buttons=QMessageBox.Ok,
             )
             sys.exit(0)
 
@@ -221,16 +205,24 @@ class UpdateCoordinator:
 
     def on_update_error(self, error):
         self._update_error_occurred = True
-        QMessageBox.warning(self.owner, "更新失败", error)
+        show_themed_message(
+            self.owner,
+            icon=QMessageBox.Warning,
+            title="更新失败",
+            text=error,
+            buttons=QMessageBox.Ok,
+        )
         if self.progress_dialog is not None:
             self.progress_dialog.close()
 
         if getattr(self.updater, "force_update", False):
-            QMessageBox.critical(
+            show_themed_message(
                 self.owner,
-                "更新失败",
-                "强制更新失败，程序将退出。\n请检查网络连接后重试。",
-                QMessageBox.Ok,
+                icon=QMessageBox.Critical,
+                title="更新失败",
+                text="强制更新失败，程序将退出。",
+                informative_text="请检查网络连接后重试。",
+                buttons=QMessageBox.Ok,
             )
             sys.exit(1)
 
@@ -241,47 +233,63 @@ class UpdateCoordinator:
         force_update = getattr(self.updater, "force_update", False)
         if force_update:
             if sys.platform == "darwin":
-                QMessageBox.information(
+                show_themed_message(
                     self.owner,
-                    "下载完成",
-                    "更新已下载完成，将打开 DMG。\n\n请手动将应用替换为新版本后重新启动。",
-                    QMessageBox.Ok,
+                    icon=QMessageBox.Information,
+                    title="下载完成",
+                    text="更新已下载完成，将打开 DMG。",
+                    informative_text="请手动将应用替换为新版本后重新启动。",
+                    buttons=QMessageBox.Ok,
                 )
                 self.updater.install_update(file_path)
                 return
 
-            QMessageBox.information(
+            show_themed_message(
                 self.owner,
-                "下载完成",
-                "更新已下载完成，程序将自动安装更新并重启。",
-                QMessageBox.Ok,
+                icon=QMessageBox.Information,
+                title="下载完成",
+                text="更新已下载完成，程序将自动安装更新并重启。",
+                buttons=QMessageBox.Ok,
             )
             self.updater.install_update(file_path)
             return
 
         if sys.platform == "darwin":
-            reply = QMessageBox.information(
+            reply = show_themed_message(
                 self.owner,
-                "下载完成",
-                "更新已下载完成，将打开 DMG。\n\n请手动将应用替换为新版本后重新启动。",
-                QMessageBox.Ok | QMessageBox.Cancel,
+                icon=QMessageBox.Information,
+                title="下载完成",
+                text="更新已下载完成，将打开 DMG。",
+                informative_text="请手动将应用替换为新版本后重新启动。",
+                buttons=QMessageBox.Ok | QMessageBox.Cancel,
+                default_button=QMessageBox.Ok,
+                primary_button=QMessageBox.Ok,
             )
             if reply == QMessageBox.Ok:
                 self.updater.install_update(file_path)
+            else:
+                self.updater.discard_downloaded_update(file_path)
             return
 
-        reply = QMessageBox.information(
+        reply = show_themed_message(
             self.owner,
-            "下载完成",
-            "更新已下载完成，点击确定开始安装。\n安装程序启动后，当前程序将自动关闭。",
-            QMessageBox.Ok | QMessageBox.Cancel,
+            icon=QMessageBox.Information,
+            title="下载完成",
+            text="更新已下载完成，点击确定开始安装。",
+            informative_text="安装程序启动后，当前程序将自动关闭。",
+            buttons=QMessageBox.Ok | QMessageBox.Cancel,
+            default_button=QMessageBox.Ok,
+            primary_button=QMessageBox.Ok,
         )
         if reply == QMessageBox.Ok:
             self.updater.install_update(file_path)
+        else:
+            self.updater.discard_downloaded_update(file_path)
 
     def _ensure_progress_dialog(self):
         if self.progress_dialog is None:
             self.progress_dialog = UpdateProgressDialog(self.owner)
+        apply_dialog_theme(self.progress_dialog, self.owner)
         self.progress_dialog.show()
         self.progress_dialog.raise_()
 

@@ -6,6 +6,8 @@ from PyQt5.QtCore import Qt, QSize, QUrl
 from PyQt5.QtGui import QDesktopServices, QIcon, QPixmap, QPainter, QPainterPath, QColor
 from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply, QSslSocket
 
+from .dialog_utils import build_icon_button_stylesheet, build_link_button_stylesheet, get_dialog_palette
+from .icon_provider import themed_icon
 from ..version import APP_VERSION
 
 
@@ -51,33 +53,33 @@ class AboutDialog(QDialog):
 
         info_layout = QVBoxLayout()
         info_layout.setSpacing(10)
-        info_layout.addWidget(self._build_info_row("src/ziyuan/about-author.svg", "作者：Achord"))
-        info_layout.addWidget(self._build_info_row("src/ziyuan/about-phone.svg", "Tel: 13160235855"))
+        info_layout.addWidget(self._build_info_row("author", "作者：Achord"))
+        info_layout.addWidget(self._build_info_row("phone", "Tel: 13160235855"))
         info_layout.addWidget(
-            self._build_info_row("src/ziyuan/about-mail.svg", "Email: <a href='mailto:achordchan@gmail.com'>achordchan@gmail.com</a>")
+            self._build_info_row("mail", "Email: <a href='mailto:achordchan@gmail.com'>achordchan@gmail.com</a>")
         )
-        info_layout.addWidget(self._build_info_row("src/ziyuan/about-version.svg", f"版本：v{APP_VERSION}"))
-        info_layout.addWidget(self._build_info_row("src/ziyuan/about-license.svg", "许可：MIT License"))
+        info_layout.addWidget(self._build_info_row("version", f"版本：v{APP_VERSION}"))
+        info_layout.addWidget(self._build_info_row("license", "许可：MIT License"))
         card_layout.addLayout(info_layout)
 
         actions_layout = QHBoxLayout()
         actions_layout.setSpacing(12)
-        actions_layout.addWidget(self._build_action_button("src/ziyuan/about-link.svg", "项目地址", "https://gitee.com/Achordchan/dazuofanyiguan"))
-        actions_layout.addWidget(self._build_action_button("src/ziyuan/about-link.svg", "问题反馈", "https://gitee.com/Achordchan/dazuofanyiguan/issues"))
+        actions_layout.addWidget(self._build_action_button("link", "项目地址", "https://gitee.com/Achordchan/dazuofanyiguan"))
+        actions_layout.addWidget(self._build_action_button("link", "问题反馈", "https://gitee.com/Achordchan/dazuofanyiguan/issues"))
         card_layout.addLayout(actions_layout)
 
         layout.addWidget(card)
         self._apply_style()
         self._load_avatar("src/ziyuan/头像.jpg")
 
-    def _build_info_row(self, icon_path: str, text: str):
+    def _build_info_row(self, icon_name: str, text: str):
         row_widget = QWidget()
         row = QHBoxLayout(row_widget)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(10)
         icon_label = QLabel()
         icon_label.setObjectName("aboutIcon")
-        icon_label.setPixmap(QIcon(icon_path).pixmap(QSize(16, 16)))
+        icon_label.setPixmap(themed_icon(icon_name, self._theme_name(), "secondary").pixmap(QSize(16, 16)))
         icon_label.setFixedWidth(20)
         text_label = QLabel(text)
         text_label.setObjectName("aboutInfo")
@@ -89,19 +91,22 @@ class AboutDialog(QDialog):
         row.addStretch()
         return row_widget
 
-    def _build_action_button(self, icon_path: str, text: str, url: str):
+    def _build_action_button(self, icon_name: str, text: str, url: str):
         button = QPushButton(text)
         button.setObjectName("aboutLinkButton")
-        button.setIcon(QIcon(icon_path))
+        button.setIcon(themed_icon(icon_name, self._theme_name(), "primary"))
         button.setIconSize(QSize(14, 14))
         button.setCursor(Qt.PointingHandCursor)
         button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(url)))
         return button
 
-    def _apply_style(self):
-        theme_name = "dark"
+    def _theme_name(self):
         if self._parent and hasattr(self._parent, "config"):
-            theme_name = self._parent.config.get("theme", "dark")
+            return self._parent.config.get("theme", "dark")
+        return "dark"
+
+    def _apply_style(self):
+        theme_name = self._theme_name()
 
         palette = {
             "dark": {
@@ -209,126 +214,117 @@ class BiaoTiLan(QWidget):
         layout.setContentsMargins(15, 0, 15, 0)
         layout.setSpacing(4)
         
-        # 图标和标题
-        icon_label = QLabel()
-        icon_label.setPixmap(QIcon("src/ziyuan/ai.svg").pixmap(QSize(20, 20)))
-        layout.addWidget(icon_label)
-        
         # 创建标题和About按钮
-        title_label = QLabel("大佐翻译官v1 - 开源AI翻译助手")
-        about_btn = QPushButton("About")  # 改为更完整的中文标题
-        about_btn.setFixedSize(70, 24)  # 调整宽度以适应新文本
-        about_btn.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                border: none;
-                color: #2196F3;
-                font-size: 12px;
-                font-weight: 500;
-                padding: 2px 8px;
-            }
-            QPushButton:hover {
-                color: #64B5F6;
-                text-decoration: underline;
-            }
-            QPushButton:pressed {
-                color: #1976D2;
-            }
-            QPushButton[darkMode="true"] {
-                color: #90CAF9;
-            }
-            QPushButton[darkMode="true"]:hover {
-                color: #BBDEFB;
-            }
-            QPushButton[darkMode="true"]:pressed {
-                color: #64B5F6;
-            }
-        """)
+        self.title_label = QLabel("大佐翻译官v1 - 开源AI翻译助手")
+        self.about_btn = QPushButton("About")
+        self.about_btn.setFixedSize(70, 24)
         
         def show_about():
             dialog = AboutDialog(self.parent)
             dialog.exec_()
             
-        about_btn.clicked.connect(show_about)
-        layout.addWidget(title_label)
-        layout.addWidget(about_btn)
-        title_label.setStyleSheet("")
-        layout.addWidget(title_label)
+        self.about_btn.clicked.connect(show_about)
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.about_btn)
         layout.addStretch()
         
         # 添加工具按钮
         self.settings_btn = QPushButton()
-        self.settings_btn.setIcon(QIcon("src/ziyuan/settings.svg"))
+        self.settings_btn.setIcon(themed_icon("settings"))
         self.settings_btn.setToolTip("设置")
         self.settings_btn.clicked.connect(self.parent._on_settings)
         
         # 将历史记录按钮改为迷你模式按钮
-        mini_mode_btn = QPushButton()
-        mini_mode_btn.setIcon(QIcon(os.path.join(self.parent.resource_dir, "mini_mode.svg")))
-        mini_mode_btn.setToolTip("切换到迷你窗口模式")
-        mini_mode_btn.clicked.connect(lambda: self.parent._toggle_mini_mode(True, show_hint=True))
+        self.mini_mode_btn = QPushButton()
+        self.mini_mode_btn.setIcon(themed_icon("mini_mode"))
+        self.mini_mode_btn.setToolTip("切换到迷你窗口模式")
+        self.mini_mode_btn.clicked.connect(lambda: self.parent._toggle_mini_mode(True, show_hint=True))
         
         self.theme_btn = QPushButton()
-        self.theme_btn.setIcon(QIcon("src/ziyuan/theme.svg"))
+        self.theme_btn.setIcon(themed_icon("theme"))
         self.theme_btn.setToolTip("切换主题")
         self.theme_btn.clicked.connect(self.parent._on_theme_change)
         
         # 最小化按钮
-        min_btn = QPushButton("一")
-        min_btn.setFixedSize(32, 32)
-        min_btn.setToolTip("最小化")
-        min_btn.clicked.connect(self.parent.showMinimized)
+        self.min_btn = QPushButton()
+        self.min_btn.setFixedSize(32, 32)
+        self.min_btn.setToolTip("最小化")
+        self.min_btn.clicked.connect(self.parent.showMinimized)
         
         # 最大化/还原按钮
-        self.max_btn = QPushButton("口")
+        self.max_btn = QPushButton()
         self.max_btn.setFixedSize(32, 32)
         self.max_btn.setToolTip("最大化")
         self.max_btn.clicked.connect(self._toggle_maximize)
         
         # 关闭按钮
-        close_btn = QPushButton("×")
-        close_btn.setFixedSize(32, 32)
-        close_btn.setToolTip("关闭")
-        close_btn.clicked.connect(self.parent.close)
+        self.close_btn = QPushButton()
+        self.close_btn.setFixedSize(32, 32)
+        self.close_btn.setToolTip("关闭")
+        self.close_btn.clicked.connect(self.parent.close)
         
         # 设置工具按钮大小
-        for btn in (self.settings_btn, mini_mode_btn, self.theme_btn):
+        for btn in (self.settings_btn, self.mini_mode_btn, self.theme_btn):
             btn.setFixedSize(28, 28)
             btn.setIconSize(QSize(16, 16))
         
         # 加载有按布局
         layout.addWidget(self.settings_btn)
-        layout.addWidget(mini_mode_btn)
+        layout.addWidget(self.mini_mode_btn)
         layout.addWidget(self.theme_btn)
-        layout.addWidget(min_btn)
+        layout.addWidget(self.min_btn)
         layout.addWidget(self.max_btn)
-        layout.addWidget(close_btn)
+        layout.addWidget(self.close_btn)
 
-        self.apply_icons(self.parent.config.get("theme", "dark") if hasattr(self.parent, "config") else "dark")
+        theme_name = self.parent.config.get("theme", "dark") if hasattr(self.parent, "config") else "dark"
+        self.apply_icons(theme_name)
+        self.apply_theme(theme_name)
+
+    def apply_theme(self, theme_name: str):
+        palette = get_dialog_palette(self.parent)
+        self.title_label.setStyleSheet(f"color: {palette.text}; font-size: 14px; font-weight: 500;")
+        self.about_btn.setStyleSheet(build_link_button_stylesheet(self.parent))
+
+        for btn in (self.settings_btn, self.mini_mode_btn, self.theme_btn, self.min_btn, self.max_btn):
+            btn.setStyleSheet(build_icon_button_stylesheet(self.parent))
+            btn.setCursor(Qt.PointingHandCursor)
+
+        self.close_btn.setStyleSheet(build_icon_button_stylesheet(self.parent, danger=True))
+        self.close_btn.setCursor(Qt.PointingHandCursor)
+
+        self.min_btn.setStyleSheet(build_icon_button_stylesheet(self.parent))
+        self.max_btn.setStyleSheet(build_icon_button_stylesheet(self.parent))
+        self.close_btn.setStyleSheet(build_icon_button_stylesheet(self.parent, danger=True))
 
     def apply_icons(self, theme_name: str):
-        tone = "white" if theme_name == "dark" else "black"
-        if theme_name == "pink":
-            settings_icon = "src/ziyuan/settings-pink.svg"
-            theme_icon = "src/ziyuan/theme-pink.svg"
-        else:
-            settings_icon = f"src/ziyuan/settings-{tone}.svg"
-            theme_icon = f"src/ziyuan/theme-{tone}.svg"
-
         if hasattr(self, "settings_btn"):
-            self.settings_btn.setIcon(QIcon(settings_icon if os.path.exists(settings_icon) else "src/ziyuan/settings.svg"))
+            self.settings_btn.setIcon(themed_icon("settings", theme_name))
         if hasattr(self, "theme_btn"):
-            self.theme_btn.setIcon(QIcon(theme_icon if os.path.exists(theme_icon) else "src/ziyuan/theme.svg"))
+            self.theme_btn.setIcon(themed_icon("theme", theme_name))
+        if hasattr(self, "mini_mode_btn"):
+            self.mini_mode_btn.setIcon(themed_icon("mini_mode", theme_name))
+        if hasattr(self, "min_btn"):
+            self.min_btn.setIcon(themed_icon("minimize", theme_name, "secondary"))
+            self.min_btn.setIconSize(QSize(15, 15))
+        if hasattr(self, "max_btn"):
+            icon_name = "restore" if self.parent.isMaximized() else "maximize"
+            self.max_btn.setIcon(themed_icon(icon_name, theme_name, "secondary"))
+            self.max_btn.setIconSize(QSize(14, 14))
+        if hasattr(self, "close_btn"):
+            self.close_btn.setIcon(themed_icon("close", theme_name, "danger"))
+            self.close_btn.setIconSize(QSize(16, 16))
     
     def _toggle_maximize(self):
         """切换最大化/还原状态"""
         if self.parent.isMaximized():
             self.parent.showNormal()
-            self.max_btn.setText("口")
+            theme_name = self.parent.config.get("theme", "dark") if hasattr(self.parent, "config") else "dark"
+            self.max_btn.setIcon(themed_icon("maximize", theme_name, "secondary"))
             self.max_btn.setToolTip("最大化")
         else:
             self.parent.showMaximized()
-            self.max_btn.setText("❐")
+            theme_name = self.parent.config.get("theme", "dark") if hasattr(self.parent, "config") else "dark"
+            self.max_btn.setIcon(themed_icon("restore", theme_name, "secondary"))
             self.max_btn.setToolTip("还原")
     
     def mousePressEvent(self, event):

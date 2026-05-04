@@ -6,6 +6,7 @@ import pyperclip
 from PyQt5.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer
 from PyQt5.QtWidgets import QApplication, QFrame, QLabel, QVBoxLayout
 
+from .dialog_utils import get_dialog_palette, to_rgba
 from .mini_chuangkou import MiniChuangKou
 
 logger = logging.getLogger(__name__)
@@ -135,6 +136,7 @@ class WindowModeController:
 
     def show_mini_mode_hint(self):
         try:
+            palette = get_dialog_palette(self.main_window)
             hint = QFrame(None)
             hint.setWindowFlags(
                 Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.X11BypassWindowManagerHint
@@ -144,9 +146,9 @@ class WindowModeController:
             hint.setFrameShape(QFrame.StyledPanel)
             hint.setStyleSheet(
                 "QFrame {"
-                "background-color: rgba(40, 167, 69, 0.9);"
+                f"background-color: {to_rgba(palette.progress_start, 0.92)};"
                 "border-radius: 20px;"
-                "border: 1px solid rgba(40, 167, 69, 1.0);"
+                f"border: 1px solid {palette.progress_start};"
                 "}"
             )
 
@@ -154,7 +156,7 @@ class WindowModeController:
             layout.setContentsMargins(15, 10, 15, 10)
 
             msg_label = QLabel("已切换到迷你窗口模式")
-            msg_label.setStyleSheet("color: white; font-size: 14px; font-weight: bold;")
+            msg_label.setStyleSheet(f"color: {palette.text}; font-size: 14px; font-weight: bold;")
             msg_label.setAlignment(Qt.AlignCenter)
             layout.addWidget(msg_label)
 

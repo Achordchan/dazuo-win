@@ -57,6 +57,10 @@ DEFAULT_CONFIG = {
         "source_lang": "自动检测",
         "target_lang": "中文",
     },
+    "deepl": {
+        "api_key": "",
+        "account_type": "",
+    },
     "openai_compat": {
         "vendor": "智谱",
         "base_url": VENDOR_DEFAULTS["智谱"]["base_url"],

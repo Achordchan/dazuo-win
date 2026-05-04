@@ -4,12 +4,14 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import QApplication
+from .dialog_utils import build_menu_stylesheet, show_themed_message
 from .themes import ThemeManager
 from .gengxinrizhi import GengXinRiZhi
 from . import update_controller as _update_controller
 from ..shezhi import Config
 from ..shezhi.config_defaults import VENDOR_DEFAULTS
-from ..gongju.autostart import configure_autostart, apply_macos_dock_visibility
+from ..gongju.autostart import configure_autostart, apply_macos_dock_visibility, is_autostart_enabled
+from ..gongju.fanyi_api.deepl import infer_deepl_plan, verify_deepl_auth
 from ..version import APP_VERSION
 import asyncio
 import time
@@ -70,6 +72,42 @@ class HotkeyEdit(QLineEdit):
 class NoWheelComboBox(QComboBox):
     def wheelEvent(self, event):
         event.ignore()
+
+
+def install_chinese_line_edit_menu(line_edit: QLineEdit):
+    line_edit.setContextMenuPolicy(Qt.CustomContextMenu)
+
+    def show_menu(pos):
+        menu = line_edit.createStandardContextMenu()
+        labels = {
+            "Undo": "撤销",
+            "Redo": "重做",
+            "Cut": "剪切",
+            "Copy": "复制",
+            "Paste": "粘贴",
+            "Delete": "删除",
+            "Clear": "清空",
+            "Select All": "全选",
+        }
+        for action in menu.actions():
+            raw_text = action.text()
+            if not raw_text:
+                continue
+
+            label, separator, shortcut = raw_text.partition("\t")
+            normalized = (
+                label.replace("&", "")
+                .replace("...", "")
+                .replace("…", "")
+                .strip()
+            )
+            if normalized in labels:
+                action.setText(labels[normalized] + (separator + shortcut if separator else ""))
+        menu.setStyleSheet(build_menu_stylesheet(line_edit))
+        menu.exec_(line_edit.mapToGlobal(pos))
+
+    line_edit.customContextMenuRequested.connect(show_menu)
+
 
 class SheZhiChuangKou(QDialog):
     """设置窗口类"""
@@ -187,7 +225,7 @@ class SheZhiChuangKou(QDialog):
         service_container.setSpacing(4)
         service_label = QLabel("当前使用:")
         self.translation_api_combo = QComboBox()
-        self.translation_api_combo.addItems(["Achord自研模型（推荐）", "Google（需科学上网）", "AI（通用接口）"])
+        self.translation_api_combo.addItems(["Google（默认）", "DeepL", "AI（通用接口）"])
         service_help = QLabel("在这里选择翻译引擎")
         service_help.setProperty("help", "true")
         service_container.addWidget(service_label)
@@ -252,6 +290,34 @@ class SheZhiChuangKou(QDialog):
         self.ai_settings_group.setLayout(ai_layout)
         service_layout.addWidget(self.ai_settings_group)
 
+        self.deepl_settings_group = QGroupBox("DeepL 设置")
+        deepl_layout = QVBoxLayout()
+        deepl_layout.setSpacing(14)
+        deepl_layout.setContentsMargins(20, 20, 20, 20)
+
+        deepl_key_label = QLabel("DeepL API Key:")
+        self.deepl_api_key_input = QLineEdit()
+        self.deepl_api_key_input.setEchoMode(QLineEdit.Password)
+        self.deepl_api_key_input.setPlaceholderText("请输入 DeepL API Key")
+        deepl_key_help = QLabel("输入 API Key 后验证身份，程序会自动区分 DeepL Free / Pro。")
+        deepl_key_help.setProperty("help", "true")
+        deepl_status_row = QHBoxLayout()
+        deepl_status_row.setSpacing(10)
+        self.deepl_account_badge = QLabel("未验证")
+        self.deepl_account_badge.setObjectName("serviceStatusPill")
+        self.deepl_verify_button = QPushButton("验证身份")
+        self.deepl_verify_button.setFixedHeight(32)
+        self.deepl_verify_button.clicked.connect(self._on_verify_deepl_clicked)
+        deepl_status_row.addWidget(self.deepl_account_badge)
+        deepl_status_row.addWidget(self.deepl_verify_button)
+        deepl_status_row.addStretch()
+        deepl_layout.addWidget(deepl_key_label)
+        deepl_layout.addWidget(self.deepl_api_key_input)
+        deepl_layout.addWidget(deepl_key_help)
+        deepl_layout.addLayout(deepl_status_row)
+        self.deepl_settings_group.setLayout(deepl_layout)
+        service_layout.addWidget(self.deepl_settings_group)
+
         self.translation_note_label = QLabel("注意：Google 翻译无需 API 密钥，但需要确保网络能访问 Google 服务")
         self.translation_note_label.setProperty("help", "true")
         self.translation_note_label.setWordWrap(True)
@@ -293,21 +359,26 @@ class SheZhiChuangKou(QDialog):
         self.vendor_combo.currentTextChanged.connect(self._on_vendor_changed)
         self.translation_api_combo.currentIndexChanged.connect(self._sync_ai_settings_visibility)
         self._current_vendor = self.vendor_combo.currentText()
+        self._install_chinese_context_menus()
     
     def _load_settings(self):
         self._load_form_from_config()
 
+    def _install_chinese_context_menus(self):
+        for line_edit in self.findChildren(QLineEdit):
+            install_chinese_line_edit_menu(line_edit)
+
     def _load_form_from_config(self):
         """加载当前设置。"""
         api_name = self.parent.config.get("translation.api", "google")
-        if api_name == "achord":
+        if api_name == "google":
             api_index = 0
-        elif api_name == "google":
+        elif api_name == "deepl":
             api_index = 1
         elif api_name == "openai_compat":
             api_index = 2
         else:
-            api_index = 1
+            api_index = 0
         self.translation_api_combo.setCurrentIndex(api_index)
 
         hotkey = self.parent.config.get("shortcuts.copy_translate", "ctrl+c,c")
@@ -315,7 +386,10 @@ class SheZhiChuangKou(QDialog):
             self.copy_hotkey_input.setText((hotkey or "").strip())
 
         if hasattr(self, "auto_start_checkbox"):
-            self.auto_start_checkbox.setChecked(self.parent.config.get("auto_start", False))
+            actual_auto_start = is_autostart_enabled()
+            if actual_auto_start != self.parent.config.get("auto_start", False):
+                self.parent.config.set("auto_start", actual_auto_start)
+            self.auto_start_checkbox.setChecked(actual_auto_start)
         if hasattr(self, "show_in_dock_checkbox"):
             self.show_in_dock_checkbox.setChecked(self.parent.config.get("show_in_dock", True))
 
@@ -325,6 +399,9 @@ class SheZhiChuangKou(QDialog):
             self.vendor_combo.setCurrentIndex(vendor_index)
 
         self._load_vendor_profile(vendor)
+        if hasattr(self, "deepl_api_key_input"):
+            self.deepl_api_key_input.setText(self.parent.config.get("deepl.api_key", ""))
+            self._update_deepl_badge(self.parent.config.get("deepl.account_type", ""))
         self._sync_ai_settings_visibility()
 
     def showEvent(self, event):
@@ -372,34 +449,47 @@ class SheZhiChuangKou(QDialog):
             if hotkey:
                 if not self._is_valid_hotkey(hotkey):
                     modifier_label = "Command" if sys.platform == "darwin" else "Ctrl"
-                    QMessageBox.warning(
+                    show_themed_message(
                         self,
-                        "快捷键无效",
-                        f"请输入至少三个键的组合（如 {modifier_label}+Shift+T），也支持 {modifier_label}+C+C。",
+                        icon=QMessageBox.Warning,
+                        title="快捷键无效",
+                        text=f"请输入至少三个键的组合（如 {modifier_label}+Shift+T），也支持 {modifier_label}+C+C。",
+                        buttons=QMessageBox.Ok,
                     )
                     return
                 self.parent.config.set("shortcuts.copy_translate", hotkey)
 
             if hasattr(self, "auto_start_checkbox"):
                 auto_start = self.auto_start_checkbox.isChecked()
-                self.parent.config.set("auto_start", auto_start)
                 try:
                     configure_autostart(auto_start)
+                    self.parent.config.set("auto_start", auto_start)
                 except Exception as e:
-                    QMessageBox.warning(self, "开机自启失败", str(e))
+                    self.auto_start_checkbox.setChecked(self.parent.config.get("auto_start", False))
+                    show_themed_message(
+                        self,
+                        icon=QMessageBox.Warning,
+                        title="开机自启失败",
+                        text=str(e),
+                        buttons=QMessageBox.Ok,
+                    )
 
             if hasattr(self, "show_in_dock_checkbox"):
                 show_in_dock = self.show_in_dock_checkbox.isChecked()
                 self.parent.config.set("show_in_dock", show_in_dock)
                 apply_macos_dock_visibility(show_in_dock)
 
-            if self.translation_api_combo.currentIndex() == 0:
-                api_name = "achord"
-            elif self.translation_api_combo.currentIndex() == 1:
-                api_name = "google"
-            else:
-                api_name = "openai_compat"
+            api_names = ["google", "deepl", "openai_compat"]
+            api_index = self.translation_api_combo.currentIndex()
+            api_name = api_names[api_index] if 0 <= api_index < len(api_names) else "google"
             self.parent.config.set("translation.api", api_name)
+
+            if hasattr(self, "deepl_api_key_input"):
+                self.parent.config.set("deepl.api_key", self.deepl_api_key_input.text().strip())
+                self.parent.config.set(
+                    "deepl.account_type",
+                    infer_deepl_plan(self.deepl_api_key_input.text().strip()) if self.deepl_api_key_input.text().strip() else "",
+                )
 
             vendor = self.vendor_combo.currentText()
             base_url = self.base_url_input.text().strip()
@@ -428,6 +518,70 @@ class SheZhiChuangKou(QDialog):
         dialog = GengXinRiZhi(self)
         dialog.setModal(True)
         dialog.exec_()
+
+    def _update_deepl_badge(self, account_type: str, detail: str = ""):
+        account_type = (account_type or "").strip().lower()
+        if account_type == "free":
+            text = "DeepL Free"
+        elif account_type == "pro":
+            text = "DeepL Pro"
+        else:
+            text = "未验证"
+        if detail:
+            text = f"{text} · {detail}"
+        self.deepl_account_badge.setText(text)
+
+    def _on_verify_deepl_clicked(self):
+        api_key = self.deepl_api_key_input.text().strip()
+        if not api_key:
+            show_themed_message(
+                self,
+                icon=QMessageBox.Warning,
+                title="DeepL API Key 缺失",
+                text="请先输入 DeepL API Key。",
+                buttons=QMessageBox.Ok,
+            )
+            return
+
+        self.deepl_verify_button.setEnabled(False)
+        self.deepl_verify_button.setText("验证中...")
+        self._update_deepl_badge(infer_deepl_plan(api_key), "验证中")
+
+        async def verify():
+            try:
+                result = await verify_deepl_auth(api_key)
+                account_type = result["plan"]
+                usage = result.get("usage") or {}
+                detail = ""
+                if isinstance(usage, dict):
+                    count = usage.get("character_count")
+                    limit = usage.get("character_limit")
+                    if count is not None and limit:
+                        detail = f"{count}/{limit}"
+                self.parent.config.set("deepl.api_key", api_key)
+                self.parent.config.set("deepl.account_type", account_type)
+                self._update_deepl_badge(account_type, detail)
+                show_themed_message(
+                    self,
+                    icon=QMessageBox.Information,
+                    title="DeepL 验证成功",
+                    text=f"已识别为 DeepL {'Free' if account_type == 'free' else 'Pro'} 账号。",
+                    buttons=QMessageBox.Ok,
+                )
+            except Exception as e:
+                self._update_deepl_badge("")
+                show_themed_message(
+                    self,
+                    icon=QMessageBox.Warning,
+                    title="DeepL 验证失败",
+                    text=str(e),
+                    buttons=QMessageBox.Ok,
+                )
+            finally:
+                self.deepl_verify_button.setEnabled(True)
+                self.deepl_verify_button.setText("验证身份")
+
+        asyncio.get_event_loop().create_task(verify())
 
     def _is_valid_hotkey(self, hotkey: str) -> bool:
         if not hotkey:
@@ -510,12 +664,16 @@ class SheZhiChuangKou(QDialog):
             loop.create_task(self.parent._init_translation_api())
 
     def _sync_ai_settings_visibility(self):
-        is_ai = self.translation_api_combo.currentIndex() == 2
+        index = self.translation_api_combo.currentIndex()
+        is_deepl = index == 1
+        is_ai = index == 2
+        if hasattr(self, "deepl_settings_group"):
+            self.deepl_settings_group.setVisible(is_deepl)
         self.ai_settings_group.setVisible(is_ai)
 
-        if self.translation_api_combo.currentIndex() == 0:
-            self.translation_note_label.setText("Achord 自研模型无需额外配置，保存后即可直接使用。")
-        elif self.translation_api_combo.currentIndex() == 1:
+        if index == 0:
             self.translation_note_label.setText("Google 翻译无需 API 密钥，但需要确保网络可以访问 Google 服务。")
+        elif index == 1:
+            self.translation_note_label.setText("DeepL 需要 API Key；程序会自动识别 Free / Pro 并显示身份标识。")
         else:
             self.translation_note_label.setText("AI 模式需要填写模型厂家、接口地址、模型名和 API Key。")

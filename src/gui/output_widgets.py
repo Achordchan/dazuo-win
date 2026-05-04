@@ -13,10 +13,12 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
 )
 from PyQt5.QtCore import Qt, QSize, QPoint, QTimer
-from PyQt5.QtGui import QIcon, QColor
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QGraphicsDropShadowEffect
 
+from .dialog_utils import build_menu_stylesheet
 from .common_widgets import FuDongAnNiu
+from .icon_provider import themed_icon
 
 
 class ShuChuKuang(QTextEdit):
@@ -43,7 +45,7 @@ class ShuChuKuang(QTextEdit):
         self.ai_info_button.setFixedSize(28, 28)
         self.ai_info_button.setObjectName("floatingIconButton")
         self.ai_info_button.setToolTip("AI 翻译详情")
-        self.ai_info_button.setIcon(QIcon("src/ziyuan/info.svg"))
+        self.ai_info_button.setIcon(themed_icon("info"))
         self.ai_info_button.setIconSize(QSize(16, 16))
         self.ai_info_button.clicked.connect(self._on_ai_info)
         self.ai_info_button.hide()
@@ -109,30 +111,7 @@ class ShuChuKuang(QTextEdit):
                 if "大佐翻译官" in text or "作者" in text:
                     action.setEnabled(False)
         
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #2D2D2D;
-                border: 1px solid #404040;
-                border-radius: 4px;
-                padding: 4px;
-            }
-            QMenu::item {
-                padding: 6px 24px;
-                border-radius: 4px;
-                color: #FFFFFF;
-            }
-            QMenu::item:selected {
-                background-color: #404040;
-            }
-            QMenu::separator {
-                height: 1px;
-                background-color: #404040;
-                margin: 4px 0px;
-            }
-            QMenu::item:disabled {
-                color: #808080;
-            }
-        """)
+        menu.setStyleSheet(build_menu_stylesheet(self))
         
         # 连接菜单项动作
         menu.triggered.connect(lambda action: self._handle_menu_action(action.text()))
@@ -235,7 +214,7 @@ class ShuChuKuang(QTextEdit):
         text = "\n".join(parts)
 
         popup = InfoTooltipPopup.get_instance()
-        popup.set_content(title="AI 翻译详情", section_title="完成信息", body=text, icon_path="src/ziyuan/ai.svg")
+        popup.set_content(title="AI 翻译详情", section_title="完成信息", body=text, icon_name="app")
         popup.toggle_near(self.ai_info_button)
     
     def setPlainText(self, text):
@@ -286,7 +265,7 @@ class AITranslatingStatusBar(QFrame):
         self.info_button = QPushButton("")
         self.info_button.setFixedSize(18, 18)
         self.info_button.setObjectName("floatingIconButton")
-        self.info_button.setIcon(QIcon("src/ziyuan/info.svg"))
+        self.info_button.setIcon(themed_icon("info"))
         self.info_button.setIconSize(QSize(14, 14))
         self.info_button.clicked.connect(self._show_info)
         self.info_button.setToolTip("AI 翻译详情")
@@ -353,7 +332,7 @@ class AITranslatingStatusBar(QFrame):
         else:
             tokens = f"Token 数：{self._estimated_tokens}"
         popup = InfoTooltipPopup.get_instance()
-        popup.set_content(title="AI 翻译详情", section_title="翻译中", body=f"当前状态：{phase}\n{tokens}", icon_path="src/ziyuan/ai.svg")
+        popup.set_content(title="AI 翻译详情", section_title="翻译中", body=f"当前状态：{phase}\n{tokens}", icon_name="app")
         popup.toggle_near(self.info_button)
 
 
@@ -403,7 +382,7 @@ class InfoTooltipPopup(QFrame):
 
         self.close_button = QPushButton("")
         self.close_button.setFixedSize(18, 18)
-        self.close_button.setIcon(QIcon("src/ziyuan/close-white.svg"))
+        self.close_button.setIcon(themed_icon("close", "dark", "danger"))
         self.close_button.setIconSize(QSize(14, 14))
         self.close_button.setObjectName("infoTooltipCloseButton")
         self.close_button.clicked.connect(self.hide)
@@ -495,7 +474,7 @@ class InfoTooltipPopup(QFrame):
             )
         )
 
-    def set_content(self, title: str, body: str, icon_path: str = "src/ziyuan/ai.svg", section_title: str = ""):
+    def set_content(self, title: str, body: str, icon_name: str = "app", section_title: str = ""):
         self.title_label.setText(title or "")
         self.section_title_label.setText(section_title or "")
         self.section_title_label.setVisible(bool((section_title or "").strip()))
@@ -526,7 +505,7 @@ class InfoTooltipPopup(QFrame):
                 html_lines.append(f"<div style='margin: 2px 0;'>{html.escape(line)}</div>")
 
         self.body_label.setText("".join(html_lines) if html_lines else "")
-        self.icon_label.setPixmap(QIcon(icon_path).pixmap(QSize(16, 16)))
+        self.icon_label.setPixmap(themed_icon(icon_name).pixmap(QSize(16, 16)))
         self.adjustSize()
 
     def toggle_near(self, anchor: QWidget):

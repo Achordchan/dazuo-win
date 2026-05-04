@@ -11,14 +11,33 @@ def _get_src_dir() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _get_main_script() -> str:
-    return os.path.join(_get_src_dir(), "main.py")
+def _get_project_root() -> str:
+    return os.path.dirname(_get_src_dir())
+
+
+def _get_resource_path(relative_path: str) -> str:
+    if getattr(sys, "frozen", False):
+        base_dir = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    else:
+        base_dir = _get_project_root()
+    return os.path.join(base_dir, relative_path)
 
 
 def _get_launch_command() -> List[str]:
     if getattr(sys, "frozen", False):
         return [sys.executable]
-    return [sys.executable, _get_main_script()]
+    return [sys.executable, "-m", "src.main"]
+
+
+def _get_working_directory() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return _get_project_root()
+
+
+def _get_icon_path() -> str:
+    icon_path = _get_resource_path(os.path.join("src", "ziyuan", "logo.ico"))
+    return icon_path if os.path.exists(icon_path) else sys.executable
 
 
 def configure_autostart(enabled: bool) -> None:
@@ -28,6 +47,17 @@ def configure_autostart(enabled: bool) -> None:
     if sys.platform == "darwin":
         _configure_macos_autostart(enabled)
         return
+
+
+def is_autostart_enabled() -> bool:
+    try:
+        if sys.platform == "win32":
+            return os.path.exists(_get_windows_shortcut_path())
+        if sys.platform == "darwin":
+            return os.path.exists(_get_macos_plist_path())
+    except Exception as exc:
+        logger.warning("检查开机自启状态失败: %s", exc)
+    return False
 
 
 def apply_macos_dock_visibility(show_in_dock: bool) -> None:
@@ -55,19 +85,27 @@ def apply_macos_dock_visibility(show_in_dock: bool) -> None:
         logger.warning("设置 Dock 显示状态失败: %s", exc)
 
 
-def _configure_windows_autostart(enabled: bool) -> None:
-    startup_dir = os.path.join(
-        os.getenv("APPDATA", ""),
+def _get_windows_startup_dir() -> str:
+    appdata = os.getenv("APPDATA", "")
+    if not appdata:
+        raise RuntimeError("无法获取 Windows 启动目录")
+    return os.path.join(
+        appdata,
         "Microsoft",
         "Windows",
         "Start Menu",
         "Programs",
         "Startup",
     )
-    if not startup_dir:
-        raise RuntimeError("无法获取 Windows 启动目录")
 
-    shortcut_path = os.path.join(startup_dir, "大佐翻译官.lnk")
+
+def _get_windows_shortcut_path() -> str:
+    return os.path.join(_get_windows_startup_dir(), "大佐翻译官.lnk")
+
+
+def _configure_windows_autostart(enabled: bool) -> None:
+    startup_dir = _get_windows_startup_dir()
+    shortcut_path = _get_windows_shortcut_path()
     if not enabled:
         if os.path.exists(shortcut_path):
             os.remove(shortcut_path)
@@ -89,14 +127,18 @@ def _configure_windows_autostart(enabled: bool) -> None:
     shortcut = shell.CreateShortCut(shortcut_path)
     shortcut.Targetpath = target
     shortcut.Arguments = arguments
-    shortcut.WorkingDirectory = os.path.dirname(target)
-    shortcut.IconLocation = target
+    shortcut.WorkingDirectory = _get_working_directory()
+    shortcut.IconLocation = _get_icon_path()
     shortcut.save()
 
 
+def _get_macos_plist_path() -> str:
+    return os.path.expanduser("~/Library/LaunchAgents/com.achord.dazuofanyiguan.plist")
+
+
 def _configure_macos_autostart(enabled: bool) -> None:
-    launch_agents_dir = os.path.expanduser("~/Library/LaunchAgents")
-    plist_path = os.path.join(launch_agents_dir, "com.achord.dazuofanyiguan.plist")
+    plist_path = _get_macos_plist_path()
+    launch_agents_dir = os.path.dirname(plist_path)
 
     if not enabled:
         if os.path.exists(plist_path):

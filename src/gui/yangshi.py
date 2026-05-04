@@ -4,7 +4,7 @@
 
 MAIN_STYLE = """
 QWidget {
-    font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", "Helvetica";
+    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", "Helvetica";
 }
 
 QMainWindow {

@@ -4,7 +4,6 @@ import json
 import aiohttp
 import asyncio
 import logging
-import tempfile
 import subprocess
 from PyQt5.QtCore import QObject, pyqtSignal
 from src.version import APP_VERSION
@@ -28,6 +27,42 @@ class Updater(QObject):
         self.release_notes = None
         self.force_update = False
         self.asset_suffix = None
+        self._download_dir = os.path.join(os.path.expanduser("~/.dzfyq"), "update_cache")
+        self._cleanup_download_cache()
+
+    def _ensure_download_dir(self) -> None:
+        os.makedirs(self._download_dir, exist_ok=True)
+
+    def _cleanup_download_cache(self, keep_file: str | None = None) -> None:
+        self._ensure_download_dir()
+        keep_path = os.path.abspath(keep_file) if keep_file else None
+        for name in os.listdir(self._download_dir):
+            file_path = os.path.join(self._download_dir, name)
+            if not os.path.isfile(file_path):
+                continue
+            if keep_path and os.path.abspath(file_path) == keep_path:
+                continue
+            try:
+                os.remove(file_path)
+                logger.info(f"已清理旧更新包: {file_path}")
+            except OSError as error:
+                logger.warning(f"清理旧更新包失败: {file_path}, {error}")
+
+    def _build_download_path(self, suffix: str) -> str:
+        self._ensure_download_dir()
+        normalized_suffix = suffix if suffix.startswith(".") else f".{suffix}"
+        filename = f"dazuofanyiguan_update{normalized_suffix}"
+        return os.path.join(self._download_dir, filename)
+
+    def discard_downloaded_update(self, file_path: str) -> None:
+        if not file_path:
+            return
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"已删除未安装的更新包: {file_path}")
+        except OSError as error:
+            logger.warning(f"删除更新包失败: {file_path}, {error}")
 
     async def check_update(self):
         """检查是否有新版本可用"""
@@ -121,11 +156,13 @@ class Updater(QObject):
             self.update_error.emit("没有可用的更新")
             return
 
+        temp_path = ""
         try:
-            # 创建临时文件
             suffix = self.asset_suffix or (".dmg" if sys.platform == "darwin" else ".exe")
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-                temp_path = tmp_file.name
+            temp_path = self._build_download_path(suffix)
+            self._cleanup_download_cache(keep_file=temp_path)
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
             async with aiohttp.ClientSession() as session:
                 async with session.get(self.update_url) as response:
@@ -159,7 +196,7 @@ class Updater(QObject):
         except Exception as e:
             logger.error(f"下载更新出错: {e}")
             self.update_error.emit(f"下载更新失败：{str(e)}")
-            if os.path.exists(temp_path):
+            if temp_path and os.path.exists(temp_path):
                 os.unlink(temp_path)
 
     def install_update(self, file_path):

@@ -58,6 +58,7 @@ python -m src.main --debug
 | 引擎 | 配置要求 | 说明 |
 |------|----------|------|
 | Google | 无需配置 | 需要网络能访问 Google 服务 |
+| DeepL | API Key | 支持 DeepL Free / Pro API |
 | 智谱 AI | API Key | Base URL: https://open.bigmodel.cn/api/paas/v4 |
 | OpenAI | API Key | Base URL: https://api.openai.com/v1 |
 | DeepSeek | API Key | Base URL: https://api.deepseek.com |
@@ -142,8 +143,8 @@ dazuofanyiguan/
 │   │   ├── fanyi.py         # 翻译接口抽象
 │   │   ├── fanyi_api/       # 翻译引擎实现
 │   │   │   ├── google.py    # Google 翻译
+│   │   │   ├── deepl.py     # DeepL 翻译
 │   │   │   ├── openai_compat.py  # OpenAI 兼容接口
-│   │   │   └── achord.py    # Achord API
 │   │   ├── kuaijiejian.py   # 快捷键监听
 │   │   ├── update.py        # 自动更新
 │   │   └── autostart.py     # 自启动配置
@@ -177,7 +178,7 @@ dazuofanyiguan/
 
 - `FanYiJieKou`：翻译接口抽象基类，定义了翻译接口规范
 - `DaZaoFanYi`：翻译管理器，负责协调各翻译服务
-- 各翻译引擎实现类：GoogleAPI、OpenAICompatibleAPI、AchordAPI
+- 各翻译引擎实现类：GoogleAPI、DeepLAPI、OpenAICompatibleAPI
 
 #### 快捷键（src/gongju/kuaijiejian）
 

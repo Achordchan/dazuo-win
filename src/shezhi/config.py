@@ -72,8 +72,13 @@ class Config:
             translation = config["translation"]
             changed = True
 
-        if translation.get("api") in {"deepseek", "doubao"}:
+        if translation.get("api") in {"deepseek", "doubao", "achord"}:
             translation["api"] = "google"
+            changed = True
+
+        deepl = config.setdefault("deepl", {})
+        if not isinstance(deepl, dict):
+            config["deepl"] = copy.deepcopy(self._default_config["deepl"])
             changed = True
 
         return changed

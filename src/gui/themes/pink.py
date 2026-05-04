@@ -5,7 +5,7 @@
 STYLE = """
 QWidget {
     color: #333333;
-    font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
     font-size: 14px;
 }
 
@@ -17,8 +17,7 @@ QTextEdit {
     font-size: 16px;
     line-height: 1.8;
     color: #333333;
-    font-family: "PingFang SC", "Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif;
-    letter-spacing: 0.4px;
+    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
     selection-background-color: #FF69B4;
     selection-color: #FFFFFF;
 }
@@ -29,11 +28,10 @@ QTextEdit:focus {
 }
 
 QTextEdit[readOnly="true"] {
-    font-family: "PingFang SC", "Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
     color: #333333;
     font-size: 16px;
     line-height: 1.8;
-    letter-spacing: 0.4px;
 }
 
 QPushButton {
@@ -45,8 +43,7 @@ QPushButton {
     font-size: 15px;
     font-weight: 500;
     min-width: 80px;
-    font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
-    letter-spacing: 0.3px;
+    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
 }
 
 QPushButton:hover {
@@ -64,9 +61,8 @@ QComboBox {
     min-width: 150px;
     background-color: #FFF0F5;
     color: #333333;
-    font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
     font-size: 15px;
-    letter-spacing: 0.2px;
 }
 
 QComboBox:hover {
@@ -96,7 +92,7 @@ QComboBox QAbstractItemView {
     padding: 4px;
     selection-background-color: #FF69B4;
     selection-color: #FFFFFF;
-    font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
     font-size: 15px;
 }
 
@@ -104,8 +100,7 @@ QLabel {
     color: #333333;
     font-size: 15px;
     padding: 4px 0;
-    font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
-    letter-spacing: 0.2px;
+    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
 }
 
 QLabel#serviceDisplayPill {
@@ -463,7 +458,7 @@ QPushButton[toolTip="关闭"] {
     background: transparent;
     border: none;
     color: #666666;
-    font-family: "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
     font-size: 16px;
     padding: 0;
     min-width: 32px;

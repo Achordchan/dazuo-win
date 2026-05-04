@@ -249,7 +249,7 @@ class MiniChuangKou(QWidget):
                 border-radius: 3px;
                 padding: 5px;
                 font-size: 12px;
-                font-family: "PingFang SC", "Microsoft YaHei", "微软雅黑";
+                font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "微软雅黑";
             }}
         """
         self.output_text.setStyleSheet(text_style)

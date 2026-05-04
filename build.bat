@@ -18,9 +18,9 @@ python -m nuitka ^
     --output-filename="大佐翻译官.exe" ^
     --windows-icon-from-ico=src\ziyuan\logo.ico ^
     --enable-plugin=pyqt5 ^
+    --include-package-data=qtawesome ^
     --include-qt-plugins=platforms,imageformats,styles ^
     --include-data-dir=src\ziyuan=src\ziyuan ^
-    --include-data-dir=src\font=src\font ^
     --include-data-dir=src\config=src\config ^
     src\main.py
 

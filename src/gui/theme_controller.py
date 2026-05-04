@@ -1,11 +1,10 @@
 import logging
 logger = logging.getLogger(__name__)
 
-import os
-
 from PyQt5.QtWidgets import QMenu, QAction
-from PyQt5.QtGui import QIcon
 
+from .dialog_utils import build_menu_stylesheet
+from .icon_provider import themed_icon
 from .output_widgets import InfoTooltipPopup
 
 
@@ -15,25 +14,7 @@ def on_theme_change(self):
         logger.info("打开主题选择菜单")
 
         theme_menu = QMenu(self)
-        theme_menu.setStyleSheet(
-            """
-                QMenu {
-                    background-color: #2D2D2D;
-                    border: 1px solid #404040;
-                    border-radius: 6px;
-                    padding: 4px;
-                }
-                QMenu::item {
-                    padding: 8px 24px;
-                    border-radius: 4px;
-                    margin: 2px 4px;
-                    color: #FFFFFF;
-                }
-                QMenu::item:selected {
-                    background-color: #0A84FF;
-                }
-            """
-        )
+        theme_menu.setStyleSheet(build_menu_stylesheet(self))
 
         theme_map = {
             "深色主题": "dark",
@@ -47,7 +28,7 @@ def on_theme_change(self):
             action = QAction(display_name, self)
             action.triggered.connect(lambda checked, t=theme_name: self._apply_theme(t))
             if theme_name == current_theme:
-                action.setIcon(QIcon("src/ziyuan/theme.svg"))
+                action.setIcon(themed_icon("check", current_theme, "primary"))
             theme_menu.addAction(action)
 
         theme_btn = self.sender()
@@ -70,6 +51,10 @@ def apply_theme(self, theme_name):
     try:
         logger.info(f"切换到主题: {theme_name}")
 
+        current_theme = self.config.get("theme", "dark")
+        if current_theme != theme_name:
+            self.config.set("theme", theme_name)
+
         theme_map = {
             "dark": "深色主题",
             "light": "浅色主题",
@@ -79,10 +64,11 @@ def apply_theme(self, theme_name):
         style = self.theme_manager.get_theme_style(display_name)
 
         self.setStyleSheet(style)
+        if self.style() is not None:
+            self.style().unpolish(self)
+            self.style().polish(self)
 
         update_button_icons(self, theme_name)
-
-        self.config.set("theme", theme_name)
 
         try:
             if hasattr(self, "source_lang_combo") and hasattr(self.source_lang_combo, "hidePopup"):
@@ -93,6 +79,16 @@ def apply_theme(self, theme_name):
                 self.source_lang_combo.refresh_theme()
             if hasattr(self, "target_lang_combo") and hasattr(self.target_lang_combo, "refresh_theme"):
                 self.target_lang_combo.refresh_theme()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "theme_changed"):
+                self.theme_changed.emit()
+            if hasattr(self, "centralWidget") and self.centralWidget():
+                self.centralWidget().update()
+            self.update()
+            self.repaint()
         except Exception:
             pass
 
@@ -110,31 +106,25 @@ def update_button_icons(self, theme_name):
         theme_name: 主题名称
     """
     try:
-        switch_icon = f"src/ziyuan/switch-{theme_name}.svg"
-        if os.path.exists(switch_icon):
-            self.switch_button.setIcon(QIcon(switch_icon))
-            logger.info(f"更新切换按钮图标: {switch_icon}")
+        if hasattr(self, "switch_button"):
+            self.switch_button.setIcon(themed_icon("switch", theme_name, "primary"))
 
-        is_dark = theme_name == "dark"
-        copy_icon = "src/ziyuan/copy-white.svg" if is_dark else "src/ziyuan/copy-black.svg"
-        info_icon = "src/ziyuan/info.svg" if is_dark else "src/ziyuan/info-black.svg"
-        close_icon = "src/ziyuan/close-white.svg" if is_dark else "src/ziyuan/close-black.svg"
+        if hasattr(self, 'output_text') and hasattr(self.output_text, 'copy_button'):
+            self.output_text.copy_button.setIcon(themed_icon("copy", theme_name))
 
-        if hasattr(self, 'output_text') and hasattr(self.output_text, 'copy_button') and os.path.exists(copy_icon):
-            self.output_text.copy_button.setIcon(QIcon(copy_icon))
-
-        if os.path.exists(info_icon):
-            if hasattr(self, 'output_text') and hasattr(self.output_text, 'ai_info_button'):
-                self.output_text.ai_info_button.setIcon(QIcon(info_icon))
-            if hasattr(self, 'ai_status_bar') and hasattr(self.ai_status_bar, 'info_button'):
-                self.ai_status_bar.info_button.setIcon(QIcon(info_icon))
+        if hasattr(self, 'output_text') and hasattr(self.output_text, 'ai_info_button'):
+            self.output_text.ai_info_button.setIcon(themed_icon("info", theme_name))
+        if hasattr(self, 'ai_status_bar') and hasattr(self.ai_status_bar, 'info_button'):
+            self.ai_status_bar.info_button.setIcon(themed_icon("info", theme_name))
 
         if hasattr(self, 'biaotilan') and hasattr(self.biaotilan, 'apply_icons'):
             self.biaotilan.apply_icons(theme_name)
+        if hasattr(self, 'biaotilan') and hasattr(self.biaotilan, 'apply_theme'):
+            self.biaotilan.apply_theme(theme_name)
 
         popup = InfoTooltipPopup.get_instance()
-        if hasattr(popup, 'close_button') and os.path.exists(close_icon):
-            popup.close_button.setIcon(QIcon(close_icon))
+        if hasattr(popup, 'close_button'):
+            popup.close_button.setIcon(themed_icon("close", theme_name, "danger"))
         if hasattr(popup, 'apply_theme'):
             popup.apply_theme(theme_name)
 

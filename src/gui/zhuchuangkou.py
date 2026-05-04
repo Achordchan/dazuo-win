@@ -47,7 +47,6 @@ from .themes import ThemeManager
 from .shezhi_chuangkou import SheZhiChuangKou
 from ..shezhi import Config
 from src.gongju.fanyi import DaZaoFanYi
-from src.gongju.fanyi_api import GoogleAPI, OpenAICompatibleAPI
 from .zhuangtai import ZhuangTaiZhiShiQi
 from ..viewmodels.translator_viewmodel import TranslatorViewModel, TranslationContext
 from ..gongju.kuaijiejian import ClipboardDoubleCopyMonitor, KuaiJieJianJianTing
@@ -56,6 +55,8 @@ from .gengxinrizhi import GengXinRiZhi
 from .mini_chuangkou import MiniChuangKou
 from .searchable_combo import SearchableComboBox
 from .common_widgets import FuDongAnNiu, ShuRuKuang
+from .dialog_utils import apply_dialog_theme
+from .icon_provider import themed_icon
 from .output_widgets import ShuChuKuang, AITranslatingStatusBar, InfoTooltipPopup
 from .title_bar import BiaoTiLan
 from .tray import init_tray
@@ -241,6 +242,7 @@ class ZhuChuangKou(QMainWindow):
         message.setInformativeText("路径：系统设置 → 隐私与安全性 → 辅助功能。")
         open_button = message.addButton("打开系统设置", QMessageBox.AcceptRole)
         message.addButton("稍后再说", QMessageBox.RejectRole)
+        apply_dialog_theme(message, self)
         message.exec_()
 
         self.config.set("mac_accessibility_prompted", True)
@@ -343,7 +345,7 @@ class ZhuChuangKou(QMainWindow):
         # 添加互转按钮
         self.switch_button = QPushButton()
         self.switch_button.setObjectName("langSwitchButton")
-        self.switch_button.setIcon(QIcon("src/ziyuan/switch.svg"))
+        self.switch_button.setIcon(themed_icon("switch", self.config.get("theme", "dark"), "primary"))
         self.switch_button.setToolTip("互换语言")
         self.switch_button.setFixedSize(28, 28)
         self.switch_button.setIconSize(QSize(24, 24))
