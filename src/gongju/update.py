@@ -304,6 +304,20 @@ function Restore-UninstallerFiles {
     }
 }
 
+function Stop-TargetEngineProcesses {
+    Write-UpdateLog "Stopping engine processes under target dir."
+    $targetRoot = [System.IO.Path]::GetFullPath($TargetDir).TrimEnd('\') + '\'
+    Get-CimInstance Win32_Process -Filter "Name = 'deeplx.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ExecutablePath -and
+            [System.IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($targetRoot, [System.StringComparison]::OrdinalIgnoreCase)
+        } |
+        ForEach-Object {
+            Write-UpdateLog "Stopping engine process PID $($_.ProcessId): $($_.ExecutablePath)"
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+}
+
 function Get-UpdateManifestVersion {
     param([string]$Directory)
 
@@ -385,6 +399,7 @@ try {
     if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
         throw "Process $ProcessId is still running after forced termination."
     }
+    Stop-TargetEngineProcesses
 
     if (Test-Path -LiteralPath $BackupDir) {
         Remove-Item -LiteralPath $BackupDir -Recurse -Force

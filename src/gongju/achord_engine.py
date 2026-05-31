@@ -255,6 +255,7 @@ class AchordEngineManager:
 class AchordEngineUpdater:
     def __init__(self):
         self.release_api = DEEPLX_REPO_API
+        self._timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
 
     def current_engine_info(self) -> Optional[AchordEngineInfo]:
         try:
@@ -264,7 +265,11 @@ class AchordEngineUpdater:
 
     async def check_latest(self) -> AchordEngineRelease:
         asset_name = _asset_name_for_current_platform()
-        async with aiohttp.ClientSession(headers={"User-Agent": f"DaZuoFanYiGuan/{APP_VERSION}"}) as session:
+        async with aiohttp.ClientSession(
+            headers={"User-Agent": f"DaZuoFanYiGuan/{APP_VERSION}"},
+            timeout=self._timeout,
+            trust_env=True,
+        ) as session:
             async with session.get(self.release_api) as response:
                 if response.status != 200:
                     raise RuntimeError(f"检查引擎更新失败: GitHub HTTP {response.status}")
@@ -306,7 +311,11 @@ class AchordEngineUpdater:
         manifest_path = os.path.join(staging_dir, "manifest.json")
 
         try:
-            async with aiohttp.ClientSession(headers={"User-Agent": f"DaZuoFanYiGuan/{APP_VERSION}"}) as session:
+            async with aiohttp.ClientSession(
+                headers={"User-Agent": f"DaZuoFanYiGuan/{APP_VERSION}"},
+                timeout=self._timeout,
+                trust_env=True,
+            ) as session:
                 async with session.get(release.download_url) as response:
                     if response.status != 200:
                         raise RuntimeError(f"下载引擎失败: HTTP {response.status}")

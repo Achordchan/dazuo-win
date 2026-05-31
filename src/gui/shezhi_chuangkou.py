@@ -1,22 +1,24 @@
+import copy
+import asyncio
+import time
+import sys
+
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                            QLineEdit, QPushButton, QComboBox, QWidget, QGroupBox,
                            QTabWidget, QMessageBox, QScrollArea, QCheckBox)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import QApplication
-from .dialog_utils import build_menu_stylesheet, show_themed_message
+from .dialog_utils import build_menu_stylesheet, install_chinese_context_menu, show_themed_message
 from .themes import ThemeManager
 from .gengxinrizhi import GengXinRiZhi
 from . import update_controller as _update_controller
 from ..shezhi import Config
 from ..shezhi.config_defaults import VENDOR_DEFAULTS
-from ..gongju.autostart import configure_autostart, apply_macos_dock_visibility, is_autostart_enabled
+from ..gongju.autostart import configure_autostart, apply_macos_dock_visibility, get_autostart_state
 from ..gongju.achord_engine import AchordEngineUpdater, compare_versions
 from ..gongju.fanyi_api.deepl import infer_deepl_plan, verify_deepl_auth
 from ..version import APP_VERSION
-import asyncio
-import time
-import sys
 
 
 class HotkeyEdit(QLineEdit):
@@ -125,6 +127,12 @@ class SheZhiChuangKou(QDialog):
         
         # 初始化配置
         self.config = Config()
+        self._auto_start_state_unknown = False
+        self._profiles_draft = copy.deepcopy(
+            self.parent.config.get("openai_compat.profiles", {}) if self.parent and hasattr(self.parent, "config") else {}
+        )
+        if not isinstance(self._profiles_draft, dict):
+            self._profiles_draft = {}
         
         # 创建主布局
         layout = QVBoxLayout(self)
@@ -167,6 +175,7 @@ class SheZhiChuangKou(QDialog):
         startup_layout = QVBoxLayout()
         startup_layout.setSpacing(8)
         self.auto_start_checkbox = QCheckBox("开机自启")
+        self.auto_start_checkbox.stateChanged.connect(self._on_auto_start_state_changed)
         startup_layout.addWidget(self.auto_start_checkbox)
         if sys.platform == "darwin":
             self.show_in_dock_checkbox = QCheckBox("显示在程序坞")
@@ -395,7 +404,7 @@ class SheZhiChuangKou(QDialog):
 
     def _install_chinese_context_menus(self):
         for line_edit in self.findChildren(QLineEdit):
-            install_chinese_line_edit_menu(line_edit)
+            install_chinese_context_menu(line_edit)
 
     def _load_form_from_config(self):
         """加载当前设置。"""
@@ -417,10 +426,7 @@ class SheZhiChuangKou(QDialog):
             self.copy_hotkey_input.setText((hotkey or "").strip())
 
         if hasattr(self, "auto_start_checkbox"):
-            actual_auto_start = is_autostart_enabled()
-            if actual_auto_start != self.parent.config.get("auto_start", False):
-                self.parent.config.set("auto_start", actual_auto_start)
-            self.auto_start_checkbox.setChecked(actual_auto_start)
+            self._load_auto_start_state()
         if hasattr(self, "show_in_dock_checkbox"):
             self.show_in_dock_checkbox.setChecked(self.parent.config.get("show_in_dock", True))
 
@@ -468,6 +474,31 @@ class SheZhiChuangKou(QDialog):
         except Exception:
             pass
 
+    def _load_auto_start_state(self):
+        state = get_autostart_state()
+        self.auto_start_checkbox.blockSignals(True)
+        try:
+            if state is None:
+                self._auto_start_state_unknown = True
+                self.auto_start_checkbox.setTristate(True)
+                self.auto_start_checkbox.setCheckState(Qt.PartiallyChecked)
+                self.auto_start_checkbox.setText("开机自启（状态未知）")
+            else:
+                self._auto_start_state_unknown = False
+                self.auto_start_checkbox.setTristate(False)
+                self.auto_start_checkbox.setChecked(bool(state))
+                self.auto_start_checkbox.setText("开机自启")
+        finally:
+            self.auto_start_checkbox.blockSignals(False)
+
+    def _on_auto_start_state_changed(self, state):
+        if not hasattr(self, "auto_start_checkbox"):
+            return
+        if state != Qt.PartiallyChecked:
+            self._auto_start_state_unknown = False
+            self.auto_start_checkbox.setTristate(False)
+            self.auto_start_checkbox.setText("开机自启")
+
     def _save_settings(self):
         self._save_form_to_config()
 
@@ -492,19 +523,26 @@ class SheZhiChuangKou(QDialog):
                 self.parent.config.set("shortcuts.copy_translate", hotkey)
 
             if hasattr(self, "auto_start_checkbox"):
-                auto_start = self.auto_start_checkbox.isChecked()
-                try:
-                    configure_autostart(auto_start)
-                    self.parent.config.set("auto_start", auto_start)
-                except Exception as e:
-                    self.auto_start_checkbox.setChecked(self.parent.config.get("auto_start", False))
-                    show_themed_message(
-                        self,
-                        icon=QMessageBox.Warning,
-                        title="开机自启失败",
-                        text=str(e),
-                        buttons=QMessageBox.Ok,
-                    )
+                if self.auto_start_checkbox.checkState() != Qt.PartiallyChecked:
+                    auto_start = self.auto_start_checkbox.isChecked()
+                    try:
+                        configure_autostart(auto_start)
+                        actual_auto_start = get_autostart_state()
+                        if actual_auto_start is None:
+                            raise RuntimeError("开机自启已写入，但无法读取系统启动项状态，请稍后重新打开设置页确认。")
+                        if actual_auto_start != auto_start:
+                            raise RuntimeError("开机自启状态校验失败，请检查系统启动目录权限后重试。")
+                        self.parent.config.set("auto_start", auto_start)
+                    except Exception as e:
+                        self._load_auto_start_state()
+                        show_themed_message(
+                            self,
+                            icon=QMessageBox.Warning,
+                            title="开机自启失败",
+                            text=str(e),
+                            buttons=QMessageBox.Ok,
+                        )
+                        return
 
             if hasattr(self, "show_in_dock_checkbox"):
                 show_in_dock = self.show_in_dock_checkbox.isChecked()
@@ -530,6 +568,7 @@ class SheZhiChuangKou(QDialog):
                 vendor = inferred_vendor
 
             self._save_vendor_profile(vendor)
+            self.parent.config.set("openai_compat.profiles", self._profiles_draft)
 
             # 同步写入当前生效配置（保持向后兼容：其他地方仍读取 openai_compat.base_url 等）
             self.parent.config.set("openai_compat.vendor", vendor)
@@ -753,7 +792,7 @@ class SheZhiChuangKou(QDialog):
         return None
 
     def _get_profiles(self):
-        profiles = self.parent.config.get("openai_compat.profiles", {})
+        profiles = self._profiles_draft
         return profiles if isinstance(profiles, dict) else {}
 
     def _load_vendor_profile(self, vendor: str) -> bool:
@@ -778,7 +817,7 @@ class SheZhiChuangKou(QDialog):
             "model": self.model_input.text().strip(),
             "api_key": self.api_key_input.text().strip(),
         }
-        self.parent.config.set("openai_compat.profiles", profiles)
+        self._profiles_draft = profiles
 
     def _notify_translation_settings_changed(self) -> None:
         return

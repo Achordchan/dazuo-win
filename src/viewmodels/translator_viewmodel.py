@@ -209,6 +209,7 @@ class TranslatorViewModel(QObject):
                 target_lang=ctx.target_lang,
                 token=token,
                 is_ai=is_ai,
+                api_name=ctx.api_name,
             )
 
             if token != self._active_token:
@@ -256,13 +257,14 @@ class TranslatorViewModel(QObject):
         target_lang: str,
         token: int,
         is_ai: bool,
+        api_name: str,
     ):
         async def once():
             result = await self._fanyi.fanyi(
                 text,
                 source_lang,
                 target_lang,
-                expected_api_name=self._context.api_name if self._context else None,
+                expected_api_name=api_name,
             )
             if isinstance(result, tuple):
                 return result

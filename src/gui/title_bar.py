@@ -63,7 +63,7 @@ class AboutDialog(QDialog):
         info_layout.addWidget(
             self._build_info_row(
                 "license",
-                "内置引擎：Powered by DeepLX / OwO Network MIT License",
+                "内置引擎：Powered by DeepLX / OwO Network MIT License / Copyright (c) 2022 OwO Network Limited",
             )
         )
         card_layout.addLayout(info_layout)

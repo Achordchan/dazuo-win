@@ -12,6 +12,25 @@ logger = logging.getLogger(__name__)
 
 
 class AchordBuiltinAPI(FanYiJieKou):
+    DETECTED_LANG_CODES = {
+        "ZH": "简体中文",
+        "ZH-HANS": "简体中文",
+        "ZH-HANT": "繁体中文",
+        "EN": "英语",
+        "EN-US": "英语",
+        "JA": "日语",
+        "KO": "韩语",
+        "FR": "法语",
+        "DE": "德语",
+        "ES": "西班牙语",
+        "RU": "俄语",
+        "IT": "意大利语",
+        "PT": "葡萄牙语",
+        "PT-BR": "葡萄牙语",
+        "VI": "越南语",
+        "AR": "阿拉伯语",
+    }
+
     LANG_CODES = {
         "简体中文": "ZH",
         "中文": "ZH",

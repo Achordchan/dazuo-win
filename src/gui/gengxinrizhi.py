@@ -3,6 +3,7 @@ from PyQt5.QtCore import Qt
 import os
 
 from .themes import ThemeManager
+from .dialog_utils import install_chinese_context_menu
 
 class GengXinRiZhi(QDialog):
     def __init__(self, parent=None):
@@ -21,6 +22,7 @@ class GengXinRiZhi(QDialog):
         self.text_browser = QTextBrowser()
         self.text_browser.setObjectName("changelogBrowser")
         self.text_browser.setOpenExternalLinks(True)
+        install_chinese_context_menu(self.text_browser)
 
         if parent is not None and hasattr(parent, "config"):
             theme_key = parent.config.get("theme", "dark")
@@ -60,4 +62,4 @@ class GengXinRiZhi(QDialog):
     def closeEvent(self, event):
         """重写关闭事件，确保正确关闭"""
         self.accept()
-        event.accept() 
+        event.accept()

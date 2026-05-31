@@ -60,7 +60,9 @@ class WindowModeController:
             logger.info("显示Mini窗口")
 
     def show_main_window(self):
-        if self.main_window.isHidden():
+        if getattr(self.main_window, "is_mini_mode", False):
+            self.set_mini_mode(False, show_hint=False)
+        if self.main_window.isHidden() or self.main_window.isMinimized():
             self.main_window.showNormal()
         else:
             self.main_window.show()
@@ -122,6 +124,7 @@ class WindowModeController:
                 text_to_translate,
                 source_lang="auto",
                 target_lang=self.main_window.target_lang_combo.currentText(),
+                expected_api_name=self.main_window.config.get("translation.api", "google"),
             )
 
             translation_text = translation_result[0] if isinstance(translation_result, tuple) else translation_result

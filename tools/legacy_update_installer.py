@@ -73,7 +73,7 @@ def _validate_source(source_dir: Path) -> str:
     return version
 
 
-def _stop_running_app() -> None:
+def _stop_running_app(install_dir: Path) -> None:
     subprocess.run(
         ["taskkill.exe", "/IM", EXE_NAME, "/T", "/F"],
         stdout=subprocess.DEVNULL,
@@ -81,6 +81,25 @@ def _stop_running_app() -> None:
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         check=False,
     )
+    if install_dir.exists():
+        root = str(install_dir.resolve()).rstrip("\\") + "\\"
+        script = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+$root = {_ps_literal(root)}
+Get-CimInstance Win32_Process -Filter "Name = 'deeplx.exe'" |
+    Where-Object {{
+        $_.ExecutablePath -and
+        [System.IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)
+    }} |
+    ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}
+"""
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
     time.sleep(0.5)
 
 
@@ -127,7 +146,7 @@ def main() -> int:
             source_dir.mkdir(parents=True)
             _safe_extract(zip_path, source_dir)
             version = _validate_source(source_dir)
-            _stop_running_app()
+            _stop_running_app(install_dir)
             _copy_tree(source_dir, install_dir)
 
         exe_path = install_dir / EXE_NAME

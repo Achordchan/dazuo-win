@@ -381,7 +381,8 @@ def main():
         app.window = window
         app.shared_memory = shared_memory
         app.single_instance_server = start_single_instance_server(window)
-        window.show()
+        if not getattr(window, "is_mini_mode", False):
+            window.show()
 
         with loop:
             try:

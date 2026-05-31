@@ -4,7 +4,7 @@ import sys
 import json
 import plistlib
 import subprocess
-from typing import List
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ def configure_autostart(enabled: bool) -> None:
         return
 
 
-def is_autostart_enabled() -> bool:
+def get_autostart_state() -> Optional[bool]:
     try:
         if sys.platform == "win32":
             shortcut_path = _get_windows_shortcut_path()
@@ -103,7 +103,12 @@ def is_autostart_enabled() -> bool:
             return os.path.exists(plist_path) and _macos_plist_matches(plist_path)
     except Exception as exc:
         logger.warning("检查开机自启状态失败: %s", exc)
+        return None
     return False
+
+
+def is_autostart_enabled() -> bool:
+    return bool(get_autostart_state())
 
 
 def apply_macos_dock_visibility(show_in_dock: bool) -> None:

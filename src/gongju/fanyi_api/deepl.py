@@ -50,6 +50,22 @@ async def verify_deepl_auth(api_key: str) -> dict:
 
 
 class DeepLAPI(FanYiJieKou):
+    DETECTED_LANG_CODES = {
+        "ZH": "简体中文",
+        "EN": "英语",
+        "JA": "日语",
+        "KO": "韩语",
+        "FR": "法语",
+        "DE": "德语",
+        "ES": "西班牙语",
+        "RU": "俄语",
+        "IT": "意大利语",
+        "PT": "葡萄牙语",
+        "VI": "越南语",
+        "TH": "泰语",
+        "AR": "阿拉伯语",
+    }
+
     TARGET_LANG_CODES = {
         "简体中文": "ZH-HANS",
         "繁体中文": "ZH-HANT",

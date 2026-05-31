@@ -146,9 +146,6 @@ class Config:
         if not isinstance(translation, dict):
             config["translation"] = copy.deepcopy(self._default_config["translation"])
             return True
-        if translation.get("source_lang") != "自动检测":
-            translation["source_lang"] = "自动检测"
-            changed = True
         if translation.get("target_lang") == "中文":
             translation["target_lang"] = "简体中文"
             changed = True

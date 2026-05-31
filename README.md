@@ -267,6 +267,8 @@ pyinstaller --clean --noconfirm build.spec
 
 本项目采用 MIT 许可证，详情请查看 LICENSE 文件。
 
+内置翻译引擎基于 DeepLX / OwO Network，遵循 MIT License，Copyright (c) 2022 OwO Network Limited。发行包会随附对应第三方 LICENSE 文件。
+
 ## 致谢
 
 感谢所有为这个项目做出贡献的人！

@@ -709,7 +709,12 @@ class MiniChuangKou(QWidget):
         try:
             # 使用父窗口的翻译功能
             if self._parent and hasattr(self._parent, 'fanyi'):
-                result = await self._parent.fanyi.fanyi(text, source_lang, target_lang)
+                result = await self._parent.fanyi.fanyi(
+                    text,
+                    source_lang,
+                    target_lang,
+                    expected_api_name=self._parent.config.get("translation.api", "google"),
+                )
                 # 确保结果是字符串
                 if isinstance(result, tuple):
                     result = str(result[0]) if result else ""

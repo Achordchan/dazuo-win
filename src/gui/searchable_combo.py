@@ -15,6 +15,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QPoint, QSize, QRectF, QStringListModel
 from PyQt5.QtGui import QPainter, QPainterPath, QColor, QPen, QPalette
 
+from .dialog_utils import install_chinese_context_menu
+
 
 _LANG_PINYIN = {
     "简体中文": ("jiantizhongwen", "jtzw"),
@@ -156,6 +158,7 @@ class SearchableComboBox(QComboBox):
         self._search_edit.setPlaceholderText("搜索：中文 / 拼音 / 缩写")
         self._search_edit.setFont(font)
         self._search_edit.setFixedHeight(30)
+        install_chinese_context_menu(self._search_edit)
         popup_layout.addWidget(self._search_edit)
 
         self._list_view = QListView(self._popup)

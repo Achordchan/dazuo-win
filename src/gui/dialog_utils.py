@@ -118,6 +118,49 @@ def build_menu_stylesheet(widget: Optional[QWidget]) -> str:
     )
 
 
+def install_chinese_context_menu(widget: QWidget) -> None:
+    widget.setContextMenuPolicy(Qt.CustomContextMenu)
+
+    labels = {
+        "Undo": "撤销",
+        "Redo": "重做",
+        "Cut": "剪切",
+        "Copy": "复制",
+        "Paste": "粘贴",
+        "Delete": "删除",
+        "Clear": "清空",
+        "Select All": "全选",
+        "Copy Link Location": "复制链接地址",
+        "Open Link": "打开链接",
+        "Save Link": "保存链接",
+        "Inspect": "检查",
+    }
+
+    def show_menu(pos):
+        if not hasattr(widget, "createStandardContextMenu"):
+            return
+        menu = widget.createStandardContextMenu()
+        for action in menu.actions():
+            raw_text = action.text()
+            if not raw_text:
+                continue
+            label, separator, shortcut = raw_text.partition("\t")
+            normalized = label.replace("&", "").replace("...", "").replace("…", "").strip()
+            if normalized in labels:
+                action.setText(labels[normalized] + (separator + shortcut if separator else ""))
+        menu.setStyleSheet(build_menu_stylesheet(widget))
+        menu.exec_(widget.mapToGlobal(pos))
+
+    previous_handler = getattr(widget, "_achord_chinese_context_menu_handler", None)
+    if previous_handler is not None:
+        try:
+            widget.customContextMenuRequested.disconnect(previous_handler)
+        except Exception:
+            pass
+    widget._achord_chinese_context_menu_handler = show_menu
+    widget.customContextMenuRequested.connect(show_menu)
+
+
 def build_icon_button_stylesheet(widget: Optional[QWidget], *, danger: bool = False) -> str:
     palette = get_dialog_palette(widget)
     hover_bg = to_rgba("#E5484D" if danger else palette.text, 0.14 if danger else 0.10)

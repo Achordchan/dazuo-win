@@ -28,13 +28,13 @@ def init_tray(self):
     show_action.triggered.connect(self.show_main_window)
     
     # 添加Mini模式切换
-    self.mini_mode_action = self.tray_menu.addAction("Mini模式 (Alt+M)")
+    self.mini_mode_action = self.tray_menu.addAction("Mini模式")
     self.mini_mode_action.setCheckable(True)
     self.mini_mode_action.setChecked(self.config.get("mini_mode", False))
     self.mini_mode_action.triggered.connect(lambda checked: self.set_mini_mode(checked, show_hint=True))
     
     # 添加显示/隐藏Mini窗口选项
-    self.toggle_mini_window_action = self.tray_menu.addAction("显示/隐藏Mini窗口 (Alt+H)")
+    self.toggle_mini_window_action = self.tray_menu.addAction("显示/隐藏Mini窗口")
     self.toggle_mini_window_action.triggered.connect(self.toggle_mini_window)
     self.toggle_mini_window_action.setEnabled(self.config.get("mini_mode", False))
     

@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from .dialog_utils import apply_dialog_theme, show_themed_message
+from .dialog_utils import apply_dialog_theme, install_chinese_context_menu, show_themed_message
 from .gengxinrizhi import GengXinRiZhi
 from ..gongju.update import Updater
 from ..version import APP_VERSION
@@ -49,6 +49,7 @@ class UpdatePromptDialog(QDialog):
         notes_box.setText(notes or "暂无更新说明")
         notes_box.setOpenExternalLinks(True)
         notes_box.setReadOnly(True)
+        install_chinese_context_menu(notes_box)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(12)
@@ -175,6 +176,10 @@ class UpdateCoordinator:
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         if os.path.exists(config_path):
             config.read(config_path, encoding="utf-8")
+        else:
+            legacy_config_path = self._get_legacy_first_run_config_path()
+            if legacy_config_path and os.path.exists(legacy_config_path):
+                config.read(legacy_config_path, encoding="utf-8")
         if not config.has_section("App"):
             config.add_section("App")
         return config, config_path
@@ -281,7 +286,7 @@ class UpdateCoordinator:
 
         force_update = getattr(self.updater, "force_update", False)
         if sys.platform == "win32":
-            self.updater.install_update(file_path)
+            asyncio.get_event_loop().create_task(self._install_windows_update(file_path))
             return
 
         if force_update:
@@ -323,6 +328,35 @@ class UpdateCoordinator:
         )
         self.updater.discard_downloaded_update(file_path)
 
+    async def _install_windows_update(self, file_path: str):
+        try:
+            await self._prepare_owner_for_update()
+            self.updater.install_update(file_path)
+        except Exception as error:
+            logger.error(f"安装 Windows 更新前清理失败: {error}")
+            self.on_update_error(f"安装更新失败: {error}")
+
+    async def _prepare_owner_for_update(self):
+        if hasattr(self.owner, "translator_vm"):
+            try:
+                await asyncio.wait_for(self.owner.translator_vm.cancel_and_wait(clear_output=False), timeout=5)
+            except Exception as error:
+                logger.warning(f"取消翻译任务失败: {error}")
+
+        init_task = getattr(self.owner, "_init_translation_api_task", None)
+        if init_task and not init_task.done():
+            init_task.cancel()
+            try:
+                await asyncio.wait_for(init_task, timeout=5)
+            except asyncio.CancelledError:
+                pass
+            except Exception as error:
+                logger.warning(f"等待翻译初始化任务结束失败: {error}")
+
+        fanyi = getattr(self.owner, "fanyi", None)
+        if fanyi and hasattr(fanyi, "close_current_api"):
+            await asyncio.wait_for(fanyi.close_current_api(), timeout=8)
+
     def _ensure_progress_dialog(self):
         if self.progress_dialog is None:
             self.progress_dialog = UpdateProgressDialog(self.owner)
@@ -346,6 +380,9 @@ class UpdateCoordinator:
                 pass
 
     def _get_first_run_config_path(self) -> str:
+        return os.path.join(os.path.expanduser("~"), ".dzfyq", "first_run.ini")
+
+    def _get_legacy_first_run_config_path(self) -> str:
         if getattr(sys, "frozen", False):
             base_path = os.path.dirname(sys.executable)
         else:

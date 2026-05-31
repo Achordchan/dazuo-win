@@ -107,8 +107,13 @@ class TranslationPanelController:
             return
 
         try:
-            lang_map = {v: k for k, v in self.main_window.fanyi._fanyi_jiekou.LANG_CODES.items()}
-            detected_name = lang_map.get(detected_lang, detected_lang)
+            api = self.main_window.fanyi._fanyi_jiekou
+            detected_map = getattr(api, "DETECTED_LANG_CODES", None)
+            if isinstance(detected_map, dict):
+                detected_name = detected_map.get(detected_lang, detected_lang)
+            else:
+                lang_map = {v: k for k, v in getattr(api, "LANG_CODES", {}).items()}
+                detected_name = lang_map.get(detected_lang, detected_lang)
             self.main_window._detected_lang = detected_lang
             self.main_window._detected_lang_text = f"自动检测 ({detected_name})"
             self.main_window.source_lang_combo.setItemText(0, self.main_window._detected_lang_text)

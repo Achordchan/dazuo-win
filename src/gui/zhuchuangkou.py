@@ -362,6 +362,7 @@ class ZhuChuangKou(QMainWindow):
             "越南语", "泰语", "阿拉伯语",
         ])
         self.source_lang_combo.setCurrentIndex(0)
+        self.source_lang_combo.currentIndexChanged.connect(self._on_source_lang_changed)
         source_layout.addWidget(self.source_lang_combo)
         source_chevron = QLabel("▾")
         source_chevron.setObjectName("langPillChevron")
@@ -469,8 +470,9 @@ class ZhuChuangKou(QMainWindow):
         """加载默认设置"""
         self._update_service_display()
         
-        # 强制设置源语言为自动检测
-        self.source_lang_combo.setCurrentIndex(0)  # 自动检测总是第一个选项
+        source_lang = self.config.get("translation.source_lang", "自动检测")
+        source_index = self.source_lang_combo.findText(source_lang)
+        self.source_lang_combo.setCurrentIndex(source_index if source_index >= 0 else 0)
         
         # 设置目标语言
         target_lang = self.config.get("translation.target_lang", "简体中文")
@@ -480,8 +482,10 @@ class ZhuChuangKou(QMainWindow):
         if target_index >= 0:
             self.target_lang_combo.setCurrentIndex(target_index)
         
-        # 保存设置以确保源语言是自动检测
-        self.config.set("translation.source_lang", "自动检测")
+    def _on_source_lang_changed(self, index):
+        self.config.set("translation.source_lang", self.source_lang_combo.currentText().split(" (")[0])
+        if self.input_text.toPlainText():
+            self.translator_vm.translate_now(self.input_text.toPlainText(), self._get_vm_context())
     
     def _switch_languages(self):
         """切换源语言和目标语言"""
