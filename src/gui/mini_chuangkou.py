@@ -699,12 +699,14 @@ class MiniChuangKou(QWidget):
         # 获取源语言和目标语言
         source_lang = "自动检测"  # Mini窗口默认使用自动检测
         target_lang = self._parent.target_lang_combo.currentText() if self._parent else "中文"
+        api_name = self._parent.config.get("translation.api", "google") if self._parent else None
+        api_generation = getattr(self._parent.fanyi, "current_api_generation", None) if self._parent else None
         
         # 开始翻译
         loop = asyncio.get_event_loop()
-        loop.create_task(self.translate_text(text, source_lang, target_lang))
+        loop.create_task(self.translate_text(text, source_lang, target_lang, api_name, api_generation))
 
-    async def translate_text(self, text, source_lang, target_lang):
+    async def translate_text(self, text, source_lang, target_lang, api_name=None, api_generation=None):
         """执行翻译过程"""
         try:
             # 使用父窗口的翻译功能
@@ -713,7 +715,8 @@ class MiniChuangKou(QWidget):
                     text,
                     source_lang,
                     target_lang,
-                    expected_api_name=self._parent.config.get("translation.api", "google"),
+                    expected_api_name=api_name,
+                    expected_api_generation=api_generation,
                 )
                 # 确保结果是字符串
                 if isinstance(result, tuple):

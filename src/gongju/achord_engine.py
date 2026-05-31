@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 import hashlib
 import json
 import logging
@@ -9,6 +10,7 @@ import socket
 import subprocess
 import sys
 import time
+import weakref
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -21,6 +23,19 @@ logger = logging.getLogger(__name__)
 DEEPLX_REPO_API = "https://api.github.com/repos/OwO-Network/DeepLX/releases/latest"
 ENGINE_VENDOR = "DeepLX"
 ENGINE_EXE_NAME = "deeplx.exe"
+ENGINE_PAYLOAD_NAME = f"{ENGINE_EXE_NAME}.payload"
+_ENGINE_MANAGERS: "weakref.WeakSet[AchordEngineManager]" = weakref.WeakSet()
+
+
+def _stop_all_engine_managers() -> None:
+    for manager in list(_ENGINE_MANAGERS):
+        try:
+            manager.stop()
+        except Exception as error:
+            logger.warning("退出时关闭 Achord 内置引擎失败: %s", error)
+
+
+atexit.register(_stop_all_engine_managers)
 
 
 @dataclass(frozen=True)
@@ -47,6 +62,21 @@ def _project_root() -> str:
 
 def _runtime_base_dir() -> str:
     if getattr(sys, "frozen", False) or globals().get("__compiled__"):
+        candidates = []
+        for raw_path in (sys.executable, sys.argv[0]):
+            if raw_path:
+                base = os.path.dirname(os.path.abspath(raw_path))
+                candidates.extend(
+                    [
+                        base,
+                        os.path.join(base, "main.dist"),
+                        os.path.join(base, f"{os.path.splitext(os.path.basename(raw_path))[0]}.dist"),
+                    ]
+                )
+        candidates.extend([os.getcwd(), os.path.join(os.getcwd(), "main.dist")])
+        for candidate in candidates:
+            if os.path.isdir(os.path.join(candidate, "engines")) or os.path.isdir(os.path.join(candidate, "src", "ziyuan")):
+                return os.path.abspath(candidate)
         return os.path.dirname(os.path.abspath(sys.executable))
     return _project_root()
 
@@ -125,14 +155,89 @@ class AchordEngineLocator:
             if os.path.isfile(executable):
                 manifest_path = os.path.join(directory, "manifest.json")
                 manifest = _read_manifest(manifest_path)
+                payload_path = os.path.join(directory, ENGINE_PAYLOAD_NAME)
+                expected_sha = str(manifest.get("sha256") or "").strip().lower()
+                if os.path.isfile(payload_path) and expected_sha:
+                    try:
+                        if _sha256_file(executable).lower() != expected_sha:
+                            materialized = AchordEngineLocator._materialize_payload_engine(directory)
+                            if materialized:
+                                return materialized
+                    except Exception as error:
+                        logger.warning("Failed to validate bundled engine hash: %s", error)
                 return AchordEngineInfo(
                     version=str(manifest.get("version") or "bundled"),
                     executable_path=executable,
                     source="bundled" if directory == _bundled_engine_dir() else "development",
                     manifest_path=manifest_path if os.path.isfile(manifest_path) else "",
                 )
+            materialized = AchordEngineLocator._materialize_payload_engine(directory)
+            if materialized:
+                return materialized
 
         raise FileNotFoundError("缺少内置引擎文件，请先下载 DeepLX Windows amd64 二进制到 third_party/deeplx/windows/amd64/deeplx.exe")
+
+    @staticmethod
+    def _materialize_payload_engine(directory: str) -> Optional[AchordEngineInfo]:
+        payload_path = os.path.join(directory, ENGINE_PAYLOAD_NAME)
+        if not os.path.isfile(payload_path):
+            return None
+
+        manifest_path = os.path.join(directory, "manifest.json")
+        manifest = _read_manifest(manifest_path)
+        version = str(manifest.get("version") or f"bundled-{APP_VERSION}")
+        target_dir = os.path.join(_engine_cache_root(), version)
+        target_exe = os.path.join(target_dir, ENGINE_EXE_NAME)
+        target_manifest = os.path.join(target_dir, "manifest.json")
+
+        if os.path.isfile(target_exe):
+            return AchordEngineInfo(
+                version=version,
+                executable_path=target_exe,
+                source="payload_cache",
+                manifest_path=target_manifest if os.path.isfile(target_manifest) else "",
+            )
+
+        staging_dir = os.path.join(_engine_cache_root(), f"_payload_{version}_{int(time.time())}")
+        try:
+            os.makedirs(staging_dir, exist_ok=True)
+            staging_exe = os.path.join(staging_dir, ENGINE_EXE_NAME)
+            shutil.copy2(payload_path, staging_exe)
+            if not os.path.isfile(staging_exe) or os.path.getsize(staging_exe) < 1024:
+                raise RuntimeError("invalid bundled engine payload")
+
+            payload_manifest = dict(manifest)
+            payload_manifest.update(
+                {
+                    "name": payload_manifest.get("name") or ENGINE_VENDOR,
+                    "version": version,
+                    "sha256": _sha256_file(staging_exe),
+                    "installed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "source": "bundled_payload",
+                }
+            )
+            with open(os.path.join(staging_dir, "manifest.json"), "w", encoding="utf-8") as file:
+                json.dump(payload_manifest, file, ensure_ascii=False, indent=2)
+                file.write("\n")
+
+            license_path = os.path.join(directory, "LICENSE")
+            if os.path.isfile(license_path):
+                shutil.copy2(license_path, os.path.join(staging_dir, "LICENSE"))
+
+            os.makedirs(_engine_cache_root(), exist_ok=True)
+            if os.path.isdir(target_dir):
+                shutil.rmtree(target_dir)
+            os.replace(staging_dir, target_dir)
+            return AchordEngineInfo(
+                version=version,
+                executable_path=target_exe,
+                source="payload_cache",
+                manifest_path=target_manifest,
+            )
+        except Exception as error:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            logger.warning("Failed to materialize bundled engine payload: %s", error)
+            return None
 
     @staticmethod
     def _latest_cached_engine() -> Optional[AchordEngineInfo]:
@@ -168,6 +273,8 @@ class AchordEngineManager:
         self.port: Optional[int] = None
         self.token: str = ""
         self.engine_info: Optional[AchordEngineInfo] = None
+        self._start_lock = asyncio.Lock()
+        _ENGINE_MANAGERS.add(self)
 
     @property
     def base_url(self) -> str:
@@ -176,41 +283,42 @@ class AchordEngineManager:
         return f"http://127.0.0.1:{self.port}"
 
     async def ensure_started(self) -> None:
-        if self.process and self.process.poll() is None and self.port:
-            return
+        async with self._start_lock:
+            if self.process and self.process.poll() is None and self.port:
+                return
 
-        self.stop()
-        self.engine_info = AchordEngineLocator.current_engine()
-        self.port = _find_free_loopback_port()
-        self.token = secrets.token_urlsafe(32)
-
-        command = [
-            self.engine_info.executable_path,
-            "-p",
-            str(self.port),
-            "-token",
-            self.token,
-        ]
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        try:
-            self.process = subprocess.Popen(
-                command,
-                cwd=os.path.dirname(self.engine_info.executable_path),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                shell=False,
-                creationflags=creationflags,
-            )
-        except Exception as error:
             self.stop()
-            raise RuntimeError(f"内置引擎启动失败: {error}") from error
+            self.engine_info = AchordEngineLocator.current_engine()
+            self.port = _find_free_loopback_port()
+            self.token = secrets.token_urlsafe(32)
 
-        try:
-            await self._wait_until_listening()
-        except Exception as error:
-            self.stop()
-            raise RuntimeError(f"内置引擎启动失败: {error}") from error
+            command = [
+                self.engine_info.executable_path,
+                "-p",
+                str(self.port),
+                "-token",
+                self.token,
+            ]
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            try:
+                self.process = subprocess.Popen(
+                    command,
+                    cwd=os.path.dirname(self.engine_info.executable_path),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    shell=False,
+                    creationflags=creationflags,
+                )
+            except Exception as error:
+                self.stop()
+                raise RuntimeError(f"内置引擎启动失败: {error}") from error
+
+            try:
+                await self._wait_until_listening()
+            except Exception as error:
+                self.stop()
+                raise RuntimeError(f"内置引擎启动失败: {error}") from error
 
     async def _wait_until_listening(self) -> None:
         if not self.port:

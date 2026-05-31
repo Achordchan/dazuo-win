@@ -211,6 +211,40 @@ async def check_achord_session():
     await api.close()
 
 
+def check_achord_payload_materialization():
+    from src.gongju import achord_engine
+    from src.gongju.achord_engine import AchordEngineLocator
+
+    with tempfile.TemporaryDirectory(prefix="dzfyq_engine_payload_") as temp:
+        root = Path(temp)
+        bundled = root / "bundled"
+        cache = root / "cache"
+        bundled.mkdir(parents=True)
+        source_exe = REPO_ROOT / "third_party" / "deeplx" / "windows" / "amd64" / "deeplx.exe"
+        source_manifest = REPO_ROOT / "third_party" / "deeplx" / "windows" / "amd64" / "manifest.json"
+        source_license = REPO_ROOT / "third_party" / "deeplx" / "windows" / "amd64" / "LICENSE"
+        (bundled / "deeplx.exe.payload").write_bytes(source_exe.read_bytes())
+        (bundled / "manifest.json").write_text(source_manifest.read_text(encoding="utf-8"), encoding="utf-8")
+        (bundled / "LICENSE").write_text(source_license.read_text(encoding="utf-8"), encoding="utf-8")
+
+        original_cache = achord_engine._engine_cache_root
+        original_bundled = achord_engine._bundled_engine_dir
+        original_dev = achord_engine._dev_engine_dir
+        achord_engine._engine_cache_root = lambda: str(cache)
+        achord_engine._bundled_engine_dir = lambda: str(bundled)
+        achord_engine._dev_engine_dir = lambda: str(root / "missing_dev")
+        try:
+            info = AchordEngineLocator.current_engine()
+            assert info.source == "payload_cache"
+            assert Path(info.executable_path).is_file()
+            assert Path(info.executable_path).name == "deeplx.exe"
+            assert not (bundled / "deeplx.exe").exists()
+        finally:
+            achord_engine._engine_cache_root = original_cache
+            achord_engine._bundled_engine_dir = original_bundled
+            achord_engine._dev_engine_dir = original_dev
+
+
 def check_settings_ui():
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     from PyQt5.QtWidgets import QApplication, QLabel, QWidget
@@ -269,6 +303,7 @@ def main() -> int:
         check_autostart,
         check_autostart_unknown_does_not_save_false,
         lambda: asyncio.run(check_achord_session()),
+        check_achord_payload_materialization,
         check_settings_ui,
         lambda: check_package(args.package),
     ]

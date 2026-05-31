@@ -16,7 +16,7 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self._parent = parent
         self.setWindowTitle("关于")
-        self.setFixedSize(560, 530)
+        self.setFixedSize(560, 560)
         self.setObjectName("aboutDialog")
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
@@ -60,10 +60,11 @@ class AboutDialog(QDialog):
         )
         info_layout.addWidget(self._build_info_row("version", f"版本：v{APP_VERSION}"))
         info_layout.addWidget(self._build_info_row("license", "许可：MIT License"))
+        info_layout.addWidget(self._build_info_row("license", "内置引擎：Powered by DeepLX / OwO Network"))
         info_layout.addWidget(
             self._build_info_row(
                 "license",
-                "内置引擎：Powered by DeepLX / OwO Network MIT License / Copyright (c) 2022 OwO Network Limited",
+                "第三方许可：MIT License，Copyright (c) 2022 OwO Network Limited",
             )
         )
         card_layout.addLayout(info_layout)
@@ -91,10 +92,9 @@ class AboutDialog(QDialog):
         text_label.setObjectName("aboutInfo")
         text_label.setTextFormat(Qt.RichText)
         text_label.setOpenExternalLinks(True)
-        text_label.setWordWrap(False)
+        text_label.setWordWrap(True)
         row.addWidget(icon_label)
-        row.addWidget(text_label)
-        row.addStretch()
+        row.addWidget(text_label, 1)
         return row_widget
 
     def _build_action_button(self, icon_name: str, text: str, url: str):

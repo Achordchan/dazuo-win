@@ -28,6 +28,7 @@ class AchordBuiltinAPI(FanYiJieKou):
         "PT": "葡萄牙语",
         "PT-BR": "葡萄牙语",
         "VI": "越南语",
+        "TH": "泰语",
         "AR": "阿拉伯语",
     }
 
@@ -45,7 +46,7 @@ class AchordBuiltinAPI(FanYiJieKou):
         "意大利语": "IT",
         "葡萄牙语": "PT",
         "越南语": "VI",
-        "泰语": None,
+        "泰语": "TH",
         "阿拉伯语": "AR",
         "自动检测": "auto",
     }
@@ -58,7 +59,7 @@ class AchordBuiltinAPI(FanYiJieKou):
         "英语": "EN-US",
         "葡萄牙语": "PT-BR",
         "自动检测": None,
-        "泰语": None,
+        "泰语": "TH",
     }
 
     SOURCE_LANG_CODES = {

@@ -53,7 +53,7 @@ if errorlevel 1 exit /b 1
 
 if not exist output mkdir output
 echo Creating Windows full update package...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; if (-not (Test-Path -LiteralPath 'dist_nuitka\main.dist\大佐翻译官.exe' -PathType Leaf)) { throw 'Nuitka output executable missing' }; Compress-Archive -Path 'dist_nuitka\main.dist\*' -DestinationPath 'output\dazuofanyiguan_full.for.windows_%VERSION%.zip' -Force"
+python tools\create_windows_update_package.py dist_nuitka\main.dist output\dazuofanyiguan_full.for.windows_%VERSION%.zip
 if errorlevel 1 exit /b 1
 
 echo Verifying Windows full update package...

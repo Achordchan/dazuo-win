@@ -42,12 +42,12 @@ python -m nuitka `
   src\main.py
 
 python tools\write_update_manifest.py dist_nuitka\main.dist
-Compress-Archive -Path dist_nuitka\main.dist\* -DestinationPath output\dazuofanyiguan_full.for.windows_$version.zip -Force
+python tools\create_windows_update_package.py dist_nuitka\main.dist output\dazuofanyiguan_full.for.windows_$version.zip
 python tools\verify_windows_package.py output\dazuofanyiguan_full.for.windows_$version.zip $version
 .\tools\smoke_update_from_1_2_4.ps1 -NewZip output\dazuofanyiguan_full.for.windows_$version.zip -ExpectedVersion $version
 ```
 
-> 如需复现 1.2.4 旧更新器在内置引擎进程占用 `deeplx.exe` 时的失败场景，可额外加 `-WithEngineLock`。该场景无法由新包内代码反向修复，需引导用户运行新版安装器；1.2.5 起更新前会主动关闭内置引擎，后续版本不再受此问题影响。
+> Windows 在线更新包会把内置引擎打成 `deeplx.exe.payload`，避免 1.2.4 旧更新器覆盖正在运行的 `deeplx.exe` 时回滚；新程序会在缺少 `deeplx.exe` 时自动从 payload 写入用户引擎缓存。
 
 产物位于：`dist_nuitka/`
 - `dist_nuitka/main.dist/大佐翻译官.exe`

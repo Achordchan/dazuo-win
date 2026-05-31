@@ -23,6 +23,21 @@ def _is_packaged_app() -> bool:
 
 def _get_runtime_base_dir() -> str:
     if _is_packaged_app():
+        candidates = []
+        for raw_path in (sys.executable, sys.argv[0]):
+            if raw_path:
+                base = os.path.dirname(os.path.abspath(raw_path))
+                candidates.extend(
+                    [
+                        base,
+                        os.path.join(base, "main.dist"),
+                        os.path.join(base, f"{os.path.splitext(os.path.basename(raw_path))[0]}.dist"),
+                    ]
+                )
+        candidates.extend([os.getcwd(), os.path.join(os.getcwd(), "main.dist")])
+        for candidate in candidates:
+            if os.path.isdir(os.path.join(candidate, "src", "ziyuan")):
+                return os.path.abspath(candidate)
         return os.path.dirname(os.path.abspath(sys.executable))
     return _get_project_root()
 
@@ -31,7 +46,21 @@ def _get_resource_path(relative_path: str) -> str:
     return os.path.join(_get_runtime_base_dir(), relative_path)
 
 
+def _get_macos_app_bundle_path() -> str:
+    executable = os.path.abspath(sys.executable)
+    parts = executable.split(os.sep)
+    for index, part in enumerate(parts):
+        if part.endswith(".app"):
+            return os.sep.join(parts[: index + 1])
+    return ""
+
+
 def _get_launch_command() -> List[str]:
+    if sys.platform == "darwin" and _is_packaged_app():
+        app_bundle = _get_macos_app_bundle_path()
+        if app_bundle and os.path.isdir(app_bundle):
+            return ["/usr/bin/open", "-n", app_bundle]
+        return [sys.executable]
     if _is_packaged_app():
         return [sys.executable]
     return [sys.executable, "-m", "src.main"]
@@ -221,6 +250,8 @@ $shortcut.Save()
 
     if not os.path.exists(shortcut_path):
         raise RuntimeError("设置开机自启失败：启动快捷方式未生成")
+    if not _windows_shortcut_matches(shortcut_path):
+        raise RuntimeError("设置开机自启失败：启动快捷方式内容与当前程序不匹配")
 
 
 def _get_macos_plist_path() -> str:

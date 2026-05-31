@@ -68,7 +68,12 @@ def verify_package(zip_path: Path, expected_version: str) -> None:
 
         _require_file(root, "src/ziyuan/logo.ico")
         _require_file(root, "PyQt5/qt-plugins/platforms/qwindows.dll")
-        _require_file(root, "engines/deeplx/windows/amd64/deeplx.exe")
+        engine_exe = root / "engines/deeplx/windows/amd64/deeplx.exe"
+        engine_payload = _require_file(root, "engines/deeplx/windows/amd64/deeplx.exe.payload")
+        if engine_exe.exists():
+            raise RuntimeError("online update package must use deeplx.exe.payload, not deeplx.exe")
+        if engine_payload.stat().st_size < 1024:
+            raise RuntimeError("engine payload is too small")
         _require_file(root, "engines/deeplx/windows/amd64/LICENSE")
         _require_file(root, "engines/deeplx/windows/amd64/manifest.json")
 

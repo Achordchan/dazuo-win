@@ -29,6 +29,7 @@ class TranslationPanelController:
             ai_model_name = self.main_window.config.get("openai_compat.model")
         return TranslationContext(
             api_name=api_name,
+            api_generation=getattr(self.main_window.fanyi, "current_api_generation", 0),
             source_lang=source_lang,
             target_lang=target_lang,
             ai_model_name=ai_model_name,

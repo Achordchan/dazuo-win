@@ -59,26 +59,34 @@ class DaZaoFanYi:
     def __init__(self):
         self._fanyi_jiekou: Optional[FanYiJieKou] = None
         self._api_name: Optional[str] = None
+        self._api_generation: int = 0
 
     @property
     def current_api_name(self) -> Optional[str]:
         return self._api_name
 
+    @property
+    def current_api_generation(self) -> int:
+        return self._api_generation
+
     async def close_current_api(self):
         jiekou = self._fanyi_jiekou
         self._fanyi_jiekou = None
         self._api_name = None
+        self._api_generation += 1
         if jiekou:
             await jiekou.close()
 
     def set_fanyi_jiekou(self, jiekou: FanYiJieKou, api_name: Optional[str] = None):
         self._fanyi_jiekou = jiekou
         self._api_name = api_name
+        self._api_generation += 1
 
     async def replace_fanyi_jiekou(self, jiekou: FanYiJieKou, api_name: Optional[str] = None):
         old_jiekou = self._fanyi_jiekou
         self._fanyi_jiekou = jiekou
         self._api_name = api_name
+        self._api_generation += 1
 
         if old_jiekou and old_jiekou is not jiekou:
             try:
@@ -92,9 +100,12 @@ class DaZaoFanYi:
         source_lang: str,
         target_lang: str,
         expected_api_name: Optional[str] = None,
+        expected_api_generation: Optional[int] = None,
     ) -> TranslationResult:
         if not self._fanyi_jiekou:
             raise ValueError("未设置翻译接口")
         if expected_api_name and self._api_name != expected_api_name:
             raise ValueError("当前翻译服务未连接，请重新选择或重试连接。")
+        if expected_api_generation is not None and self._api_generation != expected_api_generation:
+            raise ValueError("当前翻译服务已切换，请重新翻译。")
         return await self._fanyi_jiekou.fanyi(text, source_lang, target_lang)

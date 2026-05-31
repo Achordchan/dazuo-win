@@ -34,7 +34,7 @@ class GengXinRiZhi(QDialog):
             display_name = theme_map.get(theme_key, "深色主题")
             self.setStyleSheet(ThemeManager.get_theme_style(display_name))
         
-        # 读��更新日志文件
+        # 读取更新日志文件
         changelog_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'ziyuan', 'changelog.md')
         if os.path.exists(changelog_path):
             with open(changelog_path, 'r', encoding='utf-8') as f:

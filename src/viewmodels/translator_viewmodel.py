@@ -11,6 +11,7 @@ from ..gongju.fanyi import sanitize_error_message
 @dataclass(frozen=True)
 class TranslationContext:
     api_name: str
+    api_generation: int
     source_lang: str
     target_lang: str
     ai_model_name: Optional[str]
@@ -210,6 +211,7 @@ class TranslatorViewModel(QObject):
                 token=token,
                 is_ai=is_ai,
                 api_name=ctx.api_name,
+                api_generation=ctx.api_generation,
             )
 
             if token != self._active_token:
@@ -257,7 +259,8 @@ class TranslatorViewModel(QObject):
         target_lang: str,
         token: int,
         is_ai: bool,
-        api_name: str,
+        api_name: Optional[str] = None,
+        api_generation: Optional[int] = None,
     ):
         async def once():
             result = await self._fanyi.fanyi(
@@ -265,6 +268,7 @@ class TranslatorViewModel(QObject):
                 source_lang,
                 target_lang,
                 expected_api_name=api_name,
+                expected_api_generation=api_generation,
             )
             if isinstance(result, tuple):
                 return result

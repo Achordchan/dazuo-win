@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QMessageBox, QWidget
+from PyQt5.QtWidgets import QMessageBox, QLineEdit, QTextBrowser, QTextEdit, QWidget
 
 
 @dataclass(frozen=True)
@@ -216,6 +216,8 @@ def _build_dialog_stylesheet_from_palette(palette: DialogPalette) -> str:
 
 def apply_dialog_theme(widget: QWidget, owner: Optional[QWidget] = None) -> None:
     widget.setStyleSheet(build_dialog_stylesheet(owner or widget))
+    for text_widget in widget.findChildren((QLineEdit, QTextEdit, QTextBrowser)):
+        install_chinese_context_menu(text_widget)
 
 
 def show_themed_message(

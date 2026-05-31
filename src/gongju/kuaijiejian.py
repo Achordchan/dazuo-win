@@ -48,6 +48,11 @@ class KuaiJieJianJianTing(QObject):
         self._key_hook_handles: List[Any] = []
         self._is_triggering = False
         self._use_double_copy = self._hotkey == self._double_copy_hotkey
+        self._is_running = False
+
+    @property
+    def is_running(self) -> bool:
+        return self._is_running
 
     def _require_keyboard(self):
         if keyboard is None:
@@ -86,8 +91,10 @@ class KuaiJieJianJianTing(QObject):
                     suppress=False,
                 )
 
+            self._is_running = True
             logger.info("快捷键监听器启动成功")
         except Exception as e:
+            self._is_running = False
             self._remove_registered_hooks()
             logger.error(f"快捷键监听器启动失败: {e}")
             raise
@@ -99,6 +106,7 @@ class KuaiJieJianJianTing(QObject):
             self._is_triggering = False
             self._is_modifier_pressed = False
             self._combination_active = False
+            self._is_running = False
             logger.info("快捷键监听器已停止")
         except Exception as e:
             logger.error(f"停止快捷键监听器失败: {e}")
@@ -135,6 +143,8 @@ class KuaiJieJianJianTing(QObject):
     def set_hotkey(self, hotkey: str):
         normalized = self._normalize_hotkey(hotkey)
         if normalized == self._hotkey:
+            if not self._is_running:
+                self.start()
             return
         old_hotkey = self._hotkey
         old_use_double_copy = self._use_double_copy

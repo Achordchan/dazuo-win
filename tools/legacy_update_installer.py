@@ -61,15 +61,18 @@ def _validate_source(source_dir: Path) -> str:
     exe_path = source_dir / EXE_NAME
     icon_path = source_dir / "src" / "ziyuan" / "logo.ico"
     engine_path = source_dir / "engines" / "deeplx" / "windows" / "amd64" / "deeplx.exe"
+    engine_payload_path = source_dir / "engines" / "deeplx" / "windows" / "amd64" / "deeplx.exe.payload"
     if not manifest_path.is_file():
         raise RuntimeError("安装包缺少版本清单。")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
     version = str(manifest.get("app_version") or "").strip()
     if not version:
         raise RuntimeError("安装包版本清单无效。")
-    for path in (exe_path, icon_path, engine_path):
+    for path in (exe_path, icon_path):
         if not path.is_file():
             raise RuntimeError(f"安装包缺少必要文件：{path.relative_to(source_dir)}")
+    if not engine_path.is_file() and not engine_payload_path.is_file():
+        raise RuntimeError("安装包缺少内置翻译引擎文件。")
     return version
 
 

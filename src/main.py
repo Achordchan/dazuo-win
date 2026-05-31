@@ -26,11 +26,31 @@ def _get_frozen_base_dir():
     if hasattr(sys, "_MEIPASS"):
         return sys._MEIPASS
 
-    exe_dir = os.path.dirname(sys.executable)
-    dist_dir = os.path.join(exe_dir, f"{os.path.splitext(os.path.basename(sys.executable))[0]}.dist")
-    if os.path.isdir(dist_dir):
-        return dist_dir
-    return exe_dir
+    candidates = []
+    for raw_path in (sys.executable, sys.argv[0]):
+        if raw_path:
+            base = os.path.dirname(os.path.abspath(raw_path))
+            candidates.extend(
+                [
+                    base,
+                    os.path.join(base, "main.dist"),
+                    os.path.join(base, f"{os.path.splitext(os.path.basename(raw_path))[0]}.dist"),
+                ]
+            )
+    candidates.extend([os.getcwd(), os.path.join(os.getcwd(), "main.dist")])
+
+    seen = set()
+    for candidate in candidates:
+        normalized = os.path.abspath(candidate)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if os.path.isdir(os.path.join(normalized, "src", "ziyuan")):
+            return normalized
+        if os.path.isdir(os.path.join(normalized, "PyQt5")):
+            return normalized
+
+    return os.path.dirname(os.path.abspath(sys.executable))
 
 
 def setup_platform_app_identity() -> None:
@@ -326,6 +346,7 @@ def start_single_instance_server(window: ZhuChuangKou) -> Optional[QLocalServer]
             if socket is not None:
                 socket.readAll()
                 socket.disconnectFromServer()
+                socket.deleteLater()
         try:
             window.show_main_window()
         except Exception as error:
@@ -341,6 +362,11 @@ def create_main_window() -> ZhuChuangKou:
 
 def shutdown_async_resources(window: ZhuChuangKou, loop) -> None:
     try:
+        if hasattr(window, "prepare_for_shutdown"):
+            window.prepare_for_shutdown()
+        if hasattr(window, "close_async_resources"):
+            loop.run_until_complete(window.close_async_resources())
+
         try:
             all_tasks = asyncio.all_tasks(loop)
         except TypeError:
@@ -351,9 +377,6 @@ def shutdown_async_resources(window: ZhuChuangKou, loop) -> None:
             task.cancel()
         if pending:
             loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-
-        if hasattr(window, "fanyi") and hasattr(window.fanyi, "close_current_api"):
-            loop.run_until_complete(window.fanyi.close_current_api())
 
         loop.run_until_complete(loop.shutdown_asyncgens())
     except Exception as error:

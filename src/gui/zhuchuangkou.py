@@ -255,39 +255,83 @@ class ZhuChuangKou(QMainWindow):
         """退出应用程序"""
         self.quit_application()
 
-    def quit_application(self):
-        if getattr(self, "_is_quitting", False):
-            QApplication.quit()
+    def prepare_for_shutdown(self):
+        """Stop UI-side resources before the event loop exits."""
+        if getattr(self, "_shutdown_prepared", False):
             return
 
+        self._shutdown_prepared = True
         self._is_quitting = True
+
         if hasattr(self, "hotkey_controller") and self.hotkey_controller:
             try:
                 self.hotkey_controller.stop()
-            except Exception:
-                pass
+            except Exception as error:
+                logger.warning(f"停止快捷键监听失败: {error}")
+
         if getattr(self, "mini_window", None):
             try:
                 self.mini_window.close()
             except Exception:
-                self.mini_window.hide()
+                try:
+                    self.mini_window.hide()
+                except Exception:
+                    pass
+
         if hasattr(self, "_save_window_geometry"):
             try:
                 self._save_window_geometry()
-            except Exception:
-                pass
+            except Exception as error:
+                logger.warning(f"保存窗口位置失败: {error}")
+
         if hasattr(self, "translator_vm"):
             try:
                 self.translator_vm.cancel(clear_output=False)
-            except Exception:
-                pass
+            except Exception as error:
+                logger.warning(f"取消翻译任务失败: {error}")
+
         if hasattr(self, "_init_translation_api_task") and self._init_translation_api_task:
             try:
                 self._init_translation_api_task.cancel()
             except Exception:
                 pass
-        if hasattr(self, 'tray_icon'):
-            self.tray_icon.hide()
+
+        if hasattr(self, "tray_icon"):
+            try:
+                self.tray_icon.hide()
+            except Exception:
+                pass
+
+    async def close_async_resources(self):
+        """Close async translation resources, including local engine children."""
+        init_task = getattr(self, "_init_translation_api_task", None)
+        if init_task and not init_task.done():
+            init_task.cancel()
+            try:
+                await init_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as error:
+                logger.debug("等待翻译初始化任务结束失败: %s", error)
+
+        if hasattr(self, "translator_vm"):
+            try:
+                await self.translator_vm.cancel_and_wait(clear_output=False)
+            except Exception as error:
+                logger.debug("等待翻译任务结束失败: %s", error)
+
+        if hasattr(self, "fanyi") and hasattr(self.fanyi, "close_current_api"):
+            try:
+                await self.fanyi.close_current_api()
+            except Exception as error:
+                logger.warning(f"关闭翻译接口失败: {error}")
+
+    def quit_application(self):
+        if getattr(self, "_is_quitting", False):
+            QApplication.quit()
+            return
+
+        self.prepare_for_shutdown()
         QApplication.quit()
 
     def show_main_window(self):
@@ -753,8 +797,9 @@ class ZhuChuangKou(QMainWindow):
             self.output_text.start_loading()
             
             try:
-                source_lang = self.source_lang_combo.currentText().split(" (")[0]
-                target_lang = self.target_lang_combo.currentText()
+                context = self._get_vm_context()
+                source_lang = context.source_lang
+                target_lang = context.target_lang
                 
                 # 按行分割文本并去除空行
                 lines = [line for line in input_text.split('\n') if line.strip()]
@@ -766,7 +811,13 @@ class ZhuChuangKou(QMainWindow):
                     return
                 
                 # 使用第一个非空行进行语言检测
-                first_result, detected_lang = await self.fanyi.fanyi(lines[0], source_lang, target_lang)
+                first_result, detected_lang = await self.fanyi.fanyi(
+                    lines[0],
+                    source_lang,
+                    target_lang,
+                    expected_api_name=context.api_name,
+                    expected_api_generation=context.api_generation,
+                )
                 
                 # 更新语言检测显示
                 if source_lang == "自动检测" and detected_lang:
@@ -800,7 +851,13 @@ class ZhuChuangKou(QMainWindow):
                         else:
                             # 翻译其他非空行
                             leading_spaces = len(original_line) - len(original_line.lstrip())
-                            result, _ = await self.fanyi.fanyi(original_line.strip(), source_lang, target_lang)
+                            result, _ = await self.fanyi.fanyi(
+                                original_line.strip(),
+                                source_lang,
+                                target_lang,
+                                expected_api_name=context.api_name,
+                                expected_api_generation=context.api_generation,
+                            )
                             translated_lines.append(' ' * leading_spaces + result)
                         current_line_index += 1
                 
@@ -924,8 +981,10 @@ class ZhuChuangKou(QMainWindow):
         )
         if tray_visible:
             if sys.platform == "darwin" and self.config.get("show_in_dock", True):
+                self.prepare_for_shutdown()
                 event.accept()
                 super().closeEvent(event)
+                QApplication.quit()
                 return
             if self.mini_window:
                 self.mini_window.hide()
@@ -933,32 +992,7 @@ class ZhuChuangKou(QMainWindow):
             event.ignore()
             return
 
-        if self.mini_window:
-            self.mini_window.close()
-
-        if hasattr(self, 'hotkey_controller') and self.hotkey_controller:
-            try:
-                self.hotkey_controller.stop()
-            except Exception:
-                pass
-
-        if hasattr(self, '_save_window_geometry'):
-            self._save_window_geometry()
-
-        if hasattr(self, 'translator_vm'):
-            try:
-                self.translator_vm.cancel(clear_output=False)
-            except Exception:
-                pass
-
-        if hasattr(self, '_init_translation_api_task') and self._init_translation_api_task:
-            try:
-                self._init_translation_api_task.cancel()
-            except Exception:
-                pass
-
-        if hasattr(self, 'tray_icon'):
-            self.tray_icon.hide()
+        self.prepare_for_shutdown()
 
         event.accept()
         super().closeEvent(event)
@@ -987,10 +1021,13 @@ class ZhuChuangKou(QMainWindow):
             self.mini_window.start_loading()
             
             # 获取翻译结果
+            context = self._get_vm_context()
             result = await self.fanyi.fanyi(
                 text,
                 source_lang="auto",
-                target_lang=self.target_lang_combo.currentText()
+                target_lang=context.target_lang,
+                expected_api_name=context.api_name,
+                expected_api_generation=context.api_generation,
             )
             
             # 处理可能的元组结果

@@ -62,12 +62,20 @@ class WindowModeController:
     def show_main_window(self):
         if getattr(self.main_window, "is_mini_mode", False):
             self.set_mini_mode(False, show_hint=False)
-        if self.main_window.isHidden() or self.main_window.isMinimized():
-            self.main_window.showNormal()
-        else:
-            self.main_window.show()
-        self.main_window.raise_()
-        self.main_window.activateWindow()
+
+        def activate():
+            state = self.main_window.windowState()
+            if state & Qt.WindowMinimized:
+                self.main_window.setWindowState((state & ~Qt.WindowMinimized) | Qt.WindowActive)
+            if self.main_window.isHidden() or self.main_window.isMinimized():
+                self.main_window.showNormal()
+            else:
+                self.main_window.show()
+            self.main_window.raise_()
+            self.main_window.activateWindow()
+
+        activate()
+        QTimer.singleShot(80, activate)
 
     def handle_copy_translate(self):
         now = time.monotonic()
@@ -85,7 +93,14 @@ class WindowModeController:
 
         if self.main_window.config.get("mini_mode", False):
             self.ensure_mini_window()
-            asyncio.ensure_future(self.translate_and_show_mini(text))
+            context = self.main_window._get_vm_context()
+            asyncio.ensure_future(
+                self.translate_and_show_mini(
+                    text,
+                    api_name=context.api_name,
+                    api_generation=context.api_generation,
+                )
+            )
             return
 
         self.main_window.input_text.setPlainText(text)
@@ -106,13 +121,20 @@ class WindowModeController:
 
         if self.main_window.config.get("mini_mode", False):
             self.ensure_mini_window()
-            asyncio.ensure_future(self.translate_and_show_mini(text))
+            context = self.main_window._get_vm_context()
+            asyncio.ensure_future(
+                self.translate_and_show_mini(
+                    text,
+                    api_name=context.api_name,
+                    api_generation=context.api_generation,
+                )
+            )
             return
 
         self.main_window.input_text.setPlainText(text)
         self.main_window.translator_vm.translate_now(text, self.main_window._get_vm_context())
 
-    async def translate_and_show_mini(self, text_to_translate, service=None):
+    async def translate_and_show_mini(self, text_to_translate, service=None, api_name=None, api_generation=None):
         try:
             mini_window = self.ensure_mini_window()
             mini_window.resize(300, 60)
@@ -120,11 +142,17 @@ class WindowModeController:
             mini_window.show_at_cursor()
             mini_window.start_loading()
 
+            if api_name is None:
+                context = self.main_window._get_vm_context()
+                api_name = context.api_name
+                api_generation = context.api_generation
+
             translation_result = await self.main_window.fanyi.fanyi(
                 text_to_translate,
                 source_lang="auto",
                 target_lang=self.main_window.target_lang_combo.currentText(),
-                expected_api_name=self.main_window.config.get("translation.api", "google"),
+                expected_api_name=api_name,
+                expected_api_generation=api_generation,
             )
 
             translation_text = translation_result[0] if isinstance(translation_result, tuple) else translation_result
