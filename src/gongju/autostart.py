@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import json
 import plistlib
 import subprocess
 from typing import List
@@ -16,24 +17,28 @@ def _get_project_root() -> str:
     return os.path.dirname(_get_src_dir())
 
 
+def _is_packaged_app() -> bool:
+    return bool(getattr(sys, "frozen", False) or globals().get("__compiled__"))
+
+
+def _get_runtime_base_dir() -> str:
+    if _is_packaged_app():
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return _get_project_root()
+
+
 def _get_resource_path(relative_path: str) -> str:
-    if getattr(sys, "frozen", False):
-        base_dir = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
-    else:
-        base_dir = _get_project_root()
-    return os.path.join(base_dir, relative_path)
+    return os.path.join(_get_runtime_base_dir(), relative_path)
 
 
 def _get_launch_command() -> List[str]:
-    if getattr(sys, "frozen", False):
+    if _is_packaged_app():
         return [sys.executable]
     return [sys.executable, "-m", "src.main"]
 
 
 def _get_working_directory() -> str:
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return _get_project_root()
+    return _get_runtime_base_dir()
 
 
 def _get_icon_path() -> str:
@@ -53,6 +58,30 @@ def _format_windows_arguments(arguments: List[str]) -> str:
 
 def _normalize_windows_arguments(arguments: str) -> str:
     return " ".join(part.strip('"') for part in (arguments or "").split())
+
+
+def _powershell_literal(value: str) -> str:
+    return "'" + str(value or "").replace("'", "''") + "'"
+
+
+def _run_powershell(script: str, *, capture_output: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ],
+        check=True,
+        capture_output=capture_output,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=12,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
 
 
 def configure_autostart(enabled: bool) -> None:
@@ -122,21 +151,14 @@ def _get_windows_shortcut_path() -> str:
 
 def _windows_shortcut_matches(shortcut_path: str) -> bool:
     try:
-        import win32com.client  # type: ignore
-    except Exception as exc:
-        logger.warning("无法校验开机自启快捷方式，按存在处理: %s", exc)
-        return True
-
-    try:
-        shell = win32com.client.Dispatch("WScript.Shell")
-        shortcut = shell.CreateShortCut(shortcut_path)
+        shortcut = _read_windows_shortcut(shortcut_path)
     except Exception as exc:
         logger.warning("无法读取开机自启快捷方式，按存在处理: %s", exc)
         return True
 
     command = _get_launch_command()
 
-    target = shortcut.Targetpath or ""
+    target = shortcut.get("TargetPath", "")
     expanded_target = os.path.expandvars(target)
     if not target or not os.path.exists(expanded_target):
         return False
@@ -144,11 +166,26 @@ def _windows_shortcut_matches(shortcut_path: str) -> bool:
         return False
 
     expected_arguments = _format_windows_arguments(command[1:])
-    if _normalize_windows_arguments(shortcut.Arguments) != _normalize_windows_arguments(expected_arguments):
+    if _normalize_windows_arguments(shortcut.get("Arguments", "")) != _normalize_windows_arguments(expected_arguments):
         return False
 
-    working_directory = shortcut.WorkingDirectory or ""
+    working_directory = shortcut.get("WorkingDirectory", "")
     return _normalize_path(working_directory) == _normalize_path(_get_working_directory())
+
+
+def _read_windows_shortcut(shortcut_path: str) -> dict:
+    script = f"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut({_powershell_literal(shortcut_path)})
+[PSCustomObject]@{{
+  TargetPath = $shortcut.TargetPath
+  Arguments = $shortcut.Arguments
+  WorkingDirectory = $shortcut.WorkingDirectory
+}} | ConvertTo-Json -Compress
+"""
+    result = _run_powershell(script, capture_output=True)
+    return json.loads((result.stdout or "{}").strip())
 
 
 def _configure_windows_autostart(enabled: bool) -> None:
@@ -159,23 +196,26 @@ def _configure_windows_autostart(enabled: bool) -> None:
             os.remove(shortcut_path)
         return
 
-    try:
-        import win32com.client  # type: ignore
-    except Exception as exc:
-        raise RuntimeError("缺少 pywin32，无法设置开机自启") from exc
-
     os.makedirs(startup_dir, exist_ok=True)
     command = _get_launch_command()
     target = command[0]
     arguments = _format_windows_arguments(command[1:])
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut({_powershell_literal(shortcut_path)})
+$shortcut.TargetPath = {_powershell_literal(target)}
+$shortcut.Arguments = {_powershell_literal(arguments)}
+$shortcut.WorkingDirectory = {_powershell_literal(_get_working_directory())}
+$shortcut.IconLocation = {_powershell_literal(_get_icon_path())}
+$shortcut.Save()
+"""
+    try:
+        _run_powershell(script)
+    except Exception as exc:
+        raise RuntimeError(f"设置开机自启失败: {exc}") from exc
 
-    shell = win32com.client.Dispatch("WScript.Shell")
-    shortcut = shell.CreateShortCut(shortcut_path)
-    shortcut.Targetpath = target
-    shortcut.Arguments = arguments
-    shortcut.WorkingDirectory = _get_working_directory()
-    shortcut.IconLocation = _get_icon_path()
-    shortcut.save()
+    if not os.path.exists(shortcut_path):
+        raise RuntimeError("设置开机自启失败：启动快捷方式未生成")
 
 
 def _get_macos_plist_path() -> str:
