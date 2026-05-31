@@ -56,6 +56,16 @@ def main() -> None:
         encoding="utf-8",
     )
 
+    setup_py_path = repo_root / "setup.py"
+    setup_py_text = setup_py_path.read_text(encoding="utf-8")
+    setup_py_text = re.sub(
+        r"version\s*=\s*['\"][^'\"]+['\"]",
+        f'version="{version}"',
+        setup_py_text,
+        count=1,
+    )
+    setup_py_path.write_text(setup_py_text, encoding="utf-8")
+
     print(f"Synced version: {version}")
 
 

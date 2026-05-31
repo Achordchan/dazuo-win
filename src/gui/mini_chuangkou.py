@@ -1,4 +1,4 @@
-﻿from PyQt5.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout, QApplication, QSizePolicy, QLabel
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout, QApplication, QSizePolicy, QLabel
 from PyQt5.QtCore import Qt, QPoint, QSize, pyqtSignal, QTimer, QRectF, QEvent
 from PyQt5.QtGui import QIcon, QPainter, QColor, QCursor, QPen, QPainterPath, QTextCursor
 import logging
@@ -249,7 +249,7 @@ class MiniChuangKou(QWidget):
                 border-radius: 3px;
                 padding: 5px;
                 font-size: 12px;
-                font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "微软雅黑";
+                font-family: "SimHei";
             }}
         """
         self.output_text.setStyleSheet(text_style)
@@ -299,12 +299,16 @@ class MiniChuangKou(QWidget):
         """根据内容自动调整窗口大小"""
         try:
             # 获取文本内容
-            text = self.output_text.toPlainText()
+            text = self._output_text()
             line_count = len(text.split('\n'))
             
             if line_count <= 1:
                 # 单行文本使用简单固定尺寸
                 self.resize(300, 60)  # 固定宽高，确保可见
+                return
+
+            if not hasattr(self.output_text, "document"):
+                self._adjust_window_size_for_text(text)
                 return
             
             # 以下是多行文本的处理逻辑
@@ -345,11 +349,16 @@ class MiniChuangKou(QWidget):
     
     def _copy_result(self):
         """复制翻译结果到剪贴板"""
-        result = self.output_text.toPlainText()
+        result = self._output_text()
         if result and result != "正在翻译...":
             pyperclip.copy(result)
             if self._parent:
                 self._parent.tishi.showMessage("翻译结果已复制到剪贴板")
+
+    def _output_text(self) -> str:
+        if hasattr(self.output_text, "toPlainText"):
+            return self.output_text.toPlainText()
+        return self.output_text.text()
     
     def _switch_to_main(self):
         """切换到主窗口"""
@@ -555,10 +564,10 @@ class MiniChuangKou(QWidget):
             event.accept()
     
     def width(self):
-        return self._width
+        return super().width()
     
     def height(self):
-        return self._height 
+        return super().height()
     
     def _on_theme_changed(self):
         """响应主题变化"""

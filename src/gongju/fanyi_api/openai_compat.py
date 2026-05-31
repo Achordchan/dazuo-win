@@ -4,7 +4,7 @@ from typing import Optional
 
 from openai import AsyncOpenAI
 
-from ..fanyi import FanYiJieKou
+from ..fanyi import FanYiJieKou, sanitize_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -70,21 +70,39 @@ class OpenAICompatibleAPI(FanYiJieKou):
                 f"请将下面{source_lang}文本翻译成{target_lang}。只返回翻译结果，不要添加解释。\n\n" + text
             )
 
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "你是专业翻译。只返回翻译结果，不要添加任何解释或额外内容。注意：输入里可能包含特殊标记 [[DAZUO_NL]]，它代表换行。你必须原样保留该标记（不要翻译、不要删除、不要新增），并保持其相对位置不变。",
-                },
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-            max_tokens=2000,
-            top_p=0.95,
-        )
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是专业翻译。只返回翻译结果，不要添加任何解释或额外内容。注意：输入里可能包含特殊标记 [[DAZUO_NL]]，它代表换行。你必须原样保留该标记（不要翻译、不要删除、不要新增），并保持其相对位置不变。",
+                    },
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.2,
+                max_tokens=2000,
+                top_p=0.95,
+            )
+        except Exception as error:
+            message = sanitize_error_message(error, [self.api_key])
+            status_code = getattr(error, "status_code", None) or getattr(error, "status", None)
+            if status_code:
+                raise ValueError(f"AI翻译失败: HTTP {status_code} {message}".strip()) from error
 
-        result = response.choices[0].message.content.strip()
+            error_type = type(error).__name__.lower()
+            if "timeout" in error_type:
+                raise ValueError("AI翻译请求超时，请检查网络连接、代理或服务商状态") from error
+            if "connection" in error_type or "connect" in error_type:
+                raise ValueError("无法连接到 AI 翻译服务，请检查网络连接、代理或模型 URL") from error
+            raise ValueError(f"AI翻译失败: {message}") from error
+
+        try:
+            result = (response.choices[0].message.content or "").strip()
+        except (AttributeError, IndexError, TypeError) as error:
+            raise ValueError("AI未返回翻译结果") from error
+        if not result:
+            raise ValueError("AI未返回翻译结果")
 
         detected_lang: Optional[str] = None
         if source_lang in ("自动检测", "auto", None, ""):

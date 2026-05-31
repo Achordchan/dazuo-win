@@ -89,7 +89,10 @@ class UpdateProgressDialog(QDialog):
 
         title = QLabel("正在下载更新")
         title.setObjectName("progressTitle")
-        subtitle = QLabel("请保持网络连接，下载完成后会自动安装")
+        subtitle_text = "请保持网络连接，下载完成后将静默替换并重启"
+        if sys.platform == "darwin":
+            subtitle_text = "请保持网络连接，下载完成后将打开 DMG"
+        subtitle = QLabel(subtitle_text)
         subtitle.setObjectName("progressSubtitle")
 
         self.progress_bar = QProgressBar()
@@ -231,6 +234,10 @@ class UpdateCoordinator:
             self.progress_dialog.close()
 
         force_update = getattr(self.updater, "force_update", False)
+        if sys.platform == "win32":
+            self.updater.install_update(file_path)
+            return
+
         if force_update:
             if sys.platform == "darwin":
                 show_themed_message(
@@ -243,16 +250,6 @@ class UpdateCoordinator:
                 )
                 self.updater.install_update(file_path)
                 return
-
-            show_themed_message(
-                self.owner,
-                icon=QMessageBox.Information,
-                title="下载完成",
-                text="更新已下载完成，程序将自动安装更新并重启。",
-                buttons=QMessageBox.Ok,
-            )
-            self.updater.install_update(file_path)
-            return
 
         if sys.platform == "darwin":
             reply = show_themed_message(
@@ -271,20 +268,14 @@ class UpdateCoordinator:
                 self.updater.discard_downloaded_update(file_path)
             return
 
-        reply = show_themed_message(
+        show_themed_message(
             self.owner,
-            icon=QMessageBox.Information,
-            title="下载完成",
-            text="更新已下载完成，点击确定开始安装。",
-            informative_text="安装程序启动后，当前程序将自动关闭。",
-            buttons=QMessageBox.Ok | QMessageBox.Cancel,
-            default_button=QMessageBox.Ok,
-            primary_button=QMessageBox.Ok,
+            icon=QMessageBox.Warning,
+            title="暂不支持",
+            text="当前平台暂不支持自动更新。",
+            buttons=QMessageBox.Ok,
         )
-        if reply == QMessageBox.Ok:
-            self.updater.install_update(file_path)
-        else:
-            self.updater.discard_downloaded_update(file_path)
+        self.updater.discard_downloaded_update(file_path)
 
     def _ensure_progress_dialog(self):
         if self.progress_dialog is None:

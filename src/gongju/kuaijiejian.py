@@ -1,13 +1,20 @@
 """全局快捷键监听模块"""
-import keyboard
 import pyperclip
 import logging
 import ctypes
 import sys
 import time
-from typing import Optional, Set, Union
+from typing import Any, List, Optional
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QApplication
+
+try:
+    import keyboard
+except Exception as error:  # pragma: no cover - depends on optional OS hook package
+    keyboard = None
+    _keyboard_import_error = error
+else:
+    _keyboard_import_error = None
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -38,39 +45,92 @@ class KuaiJieJianJianTing(QObject):
         self._last_c_time = 0
         self._combination_active = False
         self._hotkey_handle = None
+        self._key_hook_handles: List[Any] = []
+        self._is_triggering = False
         self._use_double_copy = self._hotkey == self._double_copy_hotkey
+
+    def _require_keyboard(self):
+        if keyboard is None:
+            raise RuntimeError(f"缺少 keyboard 依赖，无法启动快捷键监听: {_keyboard_import_error}")
+        return keyboard
     
     def start(self):
         """启动快捷键监听"""
         try:
             self.stop()
+            keyboard_module = self._require_keyboard()
             self._hotkey_handle = None
+            self._key_hook_handles = []
+            self._is_triggering = False
             self._use_double_copy = self._hotkey == self._double_copy_hotkey
 
             if self._use_double_copy:
-                keyboard.on_press_key(self._modifier_key, self._on_modifier_press, suppress=False)
-                keyboard.on_release_key(self._modifier_key, self._on_modifier_release, suppress=False)
-                keyboard.on_press_key('c', self._on_c_press, suppress=False)
+                self._key_hook_handles.append(
+                    keyboard_module.on_press_key(self._modifier_key, self._on_modifier_press, suppress=False)
+                )
+                self._key_hook_handles.append(
+                    keyboard_module.on_release_key(self._modifier_key, self._on_modifier_release, suppress=False)
+                )
+                self._key_hook_handles.append(
+                    keyboard_module.on_press_key('c', self._on_c_press, suppress=False)
+                )
             else:
                 if not self._hotkey:
                     self._hotkey = self._double_copy_hotkey
                     self._use_double_copy = True
                     self.start()
                     return
-                self._hotkey_handle = keyboard.add_hotkey(self._hotkey, self._on_hotkey_trigger, suppress=False)
+                self._hotkey_handle = keyboard_module.add_hotkey(
+                    self._hotkey,
+                    self._on_hotkey_trigger,
+                    suppress=False,
+                )
 
             logger.info("快捷键监听器启动成功")
         except Exception as e:
+            self._remove_registered_hooks()
             logger.error(f"快捷键监听器启动失败: {e}")
             raise
     
     def stop(self):
         """停止快捷键监听"""
         try:
-            keyboard.unhook_all()
+            self._remove_registered_hooks()
+            self._is_triggering = False
+            self._is_modifier_pressed = False
+            self._combination_active = False
             logger.info("快捷键监听器已停止")
         except Exception as e:
             logger.error(f"停止快捷键监听器失败: {e}")
+
+    def _remove_registered_hooks(self):
+        if keyboard is None:
+            self._hotkey_handle = None
+            self._key_hook_handles = []
+            return
+
+        if self._hotkey_handle is not None:
+            try:
+                keyboard.remove_hotkey(self._hotkey_handle)
+            except Exception:
+                try:
+                    keyboard.unhook(self._hotkey_handle)
+                except Exception as error:
+                    logger.debug("移除快捷键 hook 失败: %s", error)
+            self._hotkey_handle = None
+
+        for handle in self._key_hook_handles:
+            try:
+                if callable(handle):
+                    handle()
+                else:
+                    keyboard.unhook(handle)
+            except Exception:
+                try:
+                    keyboard.unhook(handle)
+                except Exception as error:
+                    logger.debug("移除按键 hook 失败: %s", error)
+        self._key_hook_handles = []
 
     def set_hotkey(self, hotkey: str):
         normalized = self._normalize_hotkey(hotkey)
@@ -92,9 +152,14 @@ class KuaiJieJianJianTing(QObject):
         self._trigger_translate()
 
     def _trigger_translate(self):
+        if self._is_triggering:
+            return
+        old_text = ""
+        self._is_triggering = True
         try:
+            keyboard_module = self._require_keyboard()
             old_text = pyperclip.paste()
-            keyboard.send(self._copy_sequence)
+            keyboard_module.send(self._copy_sequence)
             time.sleep(0.1)
             new_text = pyperclip.paste()
 
@@ -113,6 +178,8 @@ class KuaiJieJianJianTing(QObject):
                     pyperclip.copy(old_text)
             except Exception:
                 pass
+        finally:
+            self._is_triggering = False
     
     def _on_modifier_press(self, event):
         """修饰键按下事件处理"""
@@ -128,13 +195,17 @@ class KuaiJieJianJianTing(QObject):
     
     def _on_c_press(self, event):
         """C 键按下事件处理"""
+        if self._is_triggering:
+            return
         current_time = time.time()
         
         # 只有在修饰键按下的状态下才处理
         if self._is_modifier_pressed:
             # 检查是否是快速的双击 C
             if (current_time - self._last_c_time) < 0.3:  # 300ms内的双击C
+                self._last_c_time = current_time
                 self._trigger_translate()
+                return
             
             self._last_c_time = current_time
     

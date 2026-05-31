@@ -55,7 +55,7 @@ DEFAULT_CONFIG = {
     "translation": {
         "api": "google",
         "source_lang": "自动检测",
-        "target_lang": "中文",
+        "target_lang": "简体中文",
     },
     "deepl": {
         "api_key": "",

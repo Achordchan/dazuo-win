@@ -1,10 +1,10 @@
-﻿"""
+"""
 应用程序样式表 - 深色主题
 """
 
 MAIN_STYLE = """
 QWidget {
-    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", "Helvetica";
+    font-family: "SimHei";
 }
 
 QMainWindow {

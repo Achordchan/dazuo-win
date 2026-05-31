@@ -56,7 +56,7 @@ from .mini_chuangkou import MiniChuangKou
 from .searchable_combo import SearchableComboBox
 from .common_widgets import FuDongAnNiu, ShuRuKuang
 from .dialog_utils import apply_dialog_theme
-from .icon_provider import themed_icon
+from .icon_provider import themed_icon, resource_dir
 from .output_widgets import ShuChuKuang, AITranslatingStatusBar, InfoTooltipPopup
 from .title_bar import BiaoTiLan
 from .tray import init_tray
@@ -98,11 +98,7 @@ class ZhuChuangKou(QMainWindow):
         self.is_mini_mode = False
         
         # 获取资源路径
-        if getattr(sys, 'frozen', False):
-            base_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
-            self.resource_dir = os.path.join(base_dir, 'src', 'ziyuan')
-        else:
-            self.resource_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'src', 'ziyuan')
+        self.resource_dir = resource_dir()
         
         logger.info(f"Resource directory: {self.resource_dir}")
         
@@ -255,19 +251,41 @@ class ZhuChuangKou(QMainWindow):
             except Exception as e:
                 logger.warning(f"打开系统设置失败: {e}")
 
-    def eventFilter(self, obj, event):
-        if sys.platform == "darwin" and event.type() == QEvent.ApplicationActivate:
-            if self.isHidden() and not self.config.get("mini_mode", False):
-                self.showNormal()
-                self.raise_()
-                self.activateWindow()
-        return super().eventFilter(obj, event)
-    
     def _quit_app(self):
         """退出应用程序"""
         self.quit_application()
 
     def quit_application(self):
+        if getattr(self, "_is_quitting", False):
+            QApplication.quit()
+            return
+
+        self._is_quitting = True
+        if hasattr(self, "hotkey_controller") and self.hotkey_controller:
+            try:
+                self.hotkey_controller.stop()
+            except Exception:
+                pass
+        if getattr(self, "mini_window", None):
+            try:
+                self.mini_window.close()
+            except Exception:
+                self.mini_window.hide()
+        if hasattr(self, "_save_window_geometry"):
+            try:
+                self._save_window_geometry()
+            except Exception:
+                pass
+        if hasattr(self, "translator_vm"):
+            try:
+                self.translator_vm.cancel(clear_output=False)
+            except Exception:
+                pass
+        if hasattr(self, "_init_translation_api_task") and self._init_translation_api_task:
+            try:
+                self._init_translation_api_task.cancel()
+            except Exception:
+                pass
         if hasattr(self, 'tray_icon'):
             self.tray_icon.hide()
         QApplication.quit()
@@ -583,6 +601,12 @@ class ZhuChuangKou(QMainWindow):
         _window_geometry.install_resize_event_filters(self, root)
 
     def eventFilter(self, obj, event):
+        if sys.platform == "darwin" and event.type() == QEvent.ApplicationActivate:
+            if self.isHidden() and not self.config.get("mini_mode", False):
+                self.showNormal()
+                self.raise_()
+                self.activateWindow()
+            return super().eventFilter(obj, event)
         return _window_geometry.event_filter(self, obj, event, super().eventFilter)
 
     def _schedule_save_window_geometry(self):
@@ -869,6 +893,11 @@ class ZhuChuangKou(QMainWindow):
 
     def closeEvent(self, event):
         """窗口关闭事件"""
+        if getattr(self, "_is_quitting", False):
+            event.accept()
+            super().closeEvent(event)
+            return
+
         if hasattr(self, 'tray_icon') and self.tray_icon.isVisible():
             if sys.platform == "darwin" and self.config.get("show_in_dock", True):
                 event.accept()
@@ -966,15 +995,10 @@ class ZhuChuangKou(QMainWindow):
     
     def _toggle_mini_mode_shortcut(self):
         """通过快捷键切换Mini模式"""
-        # 不论窗口状态如何，只要不是迷你模式，就确保主窗口显示并位于前台
-        if not self.is_mini_mode:
-            self.show_main_window()
-            logger.info("通过模式切换快捷键激活主窗口")
-            return
-        
-        # 切换模式
-        self.mini_mode_action.setChecked(not self.mini_mode_action.isChecked())
-        self.set_mini_mode(self.mini_mode_action.isChecked())
+        enabled = not self.is_mini_mode
+        if hasattr(self, "mini_mode_action"):
+            self.mini_mode_action.setChecked(enabled)
+        self.set_mini_mode(enabled)
     
     def _toggle_mini_window(self):
         """切换Mini窗口的显示/隐藏状态"""

@@ -17,6 +17,15 @@ def deepl_base_url_for_plan(plan: str) -> str:
     return "https://api-free.deepl.com" if plan == "free" else "https://api.deepl.com"
 
 
+async def read_deepl_json(response: aiohttp.ClientResponse) -> dict:
+    try:
+        data = await response.json(content_type=None)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        body = await response.text()
+        return {"message": body.strip()[:500]}
+
+
 async def verify_deepl_auth(api_key: str) -> dict:
     api_key = (api_key or "").strip()
     if not api_key:
@@ -32,9 +41,9 @@ async def verify_deepl_auth(api_key: str) -> dict:
     }
     async with aiohttp.ClientSession(headers=headers, timeout=timeout, trust_env=True) as session:
         async with session.get(f"{base_url}/v2/usage") as response:
-            data = await response.json(content_type=None)
+            data = await read_deepl_json(response)
             if response.status != 200:
-                message = data.get("message") if isinstance(data, dict) else ""
+                message = data.get("message", "")
                 raise ValueError(f"DeepL认证失败: HTTP {response.status} {message}".strip())
             return {"plan": plan, "base_url": base_url, "usage": data}
 
@@ -121,12 +130,12 @@ class DeepLAPI(FanYiJieKou):
             session = await self._ensure_session()
             try:
                 async with session.post(f"{self.base_url}/v2/translate", json=payload) as response:
-                    data = await response.json(content_type=None)
+                    data = await read_deepl_json(response)
                     if response.status != 200:
-                        message = data.get("message") if isinstance(data, dict) else ""
+                        message = data.get("message", "")
                         raise ValueError(f"DeepL翻译失败: HTTP {response.status} {message}".strip())
 
-                    translations = data.get("translations", []) if isinstance(data, dict) else []
+                    translations = data.get("translations", [])
                     if not translations:
                         raise ValueError("DeepL未返回翻译结果")
 

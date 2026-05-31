@@ -7,7 +7,7 @@ from PyQt5.QtGui import QDesktopServices, QIcon, QPixmap, QPainter, QPainterPath
 from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply, QSslSocket
 
 from .dialog_utils import build_icon_button_stylesheet, build_link_button_stylesheet, get_dialog_palette
-from .icon_provider import themed_icon
+from .icon_provider import themed_icon, resource_path
 from ..version import APP_VERSION
 
 
@@ -70,7 +70,7 @@ class AboutDialog(QDialog):
 
         layout.addWidget(card)
         self._apply_style()
-        self._load_avatar("src/ziyuan/头像.jpg")
+        self._load_avatar(resource_path("头像.jpg"))
 
     def _build_info_row(self, icon_name: str, text: str):
         row_widget = QWidget()

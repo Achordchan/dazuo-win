@@ -39,19 +39,25 @@ class WindowModeController:
 
         if hasattr(self.main_window, "mini_mode_action"):
             self.main_window.mini_mode_action.setChecked(enabled)
+        if hasattr(self.main_window, "toggle_mini_window_action"):
+            self.main_window.toggle_mini_window_action.setEnabled(enabled)
+        if hasattr(self.main_window, "toggle_mini_window_shortcut"):
+            self.main_window.toggle_mini_window_shortcut.setEnabled(enabled)
 
         self.main_window.config.set("mini_mode", enabled)
         self.main_window.config.save()
 
     def toggle_mini_window(self):
-        mini_window = getattr(self.main_window, "mini_window", None)
-        if self.main_window.is_mini_mode and mini_window:
-            if mini_window.isVisible():
-                mini_window.hide()
-                logger.info("隐藏Mini窗口")
-            else:
-                mini_window.show_at_cursor()
-                logger.info("显示Mini窗口")
+        if not self.main_window.is_mini_mode:
+            return
+
+        mini_window = self.ensure_mini_window()
+        if mini_window.isVisible():
+            mini_window.hide()
+            logger.info("隐藏Mini窗口")
+        else:
+            mini_window.show_at_cursor()
+            logger.info("显示Mini窗口")
 
     def show_main_window(self):
         if self.main_window.isHidden():

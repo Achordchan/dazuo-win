@@ -27,6 +27,7 @@ python -m nuitka `
   --output-filename="大佐翻译官.exe" `
   --windows-icon-from-ico=src\ziyuan\logo.ico `
   --enable-plugin=pyqt5 `
+  --include-package-data=qtawesome `
   --include-qt-plugins=platforms,imageformats,styles `
   --include-data-dir=src\ziyuan=src\ziyuan `
   --include-data-dir=src\config=src\config `
@@ -34,8 +35,9 @@ python -m nuitka `
 ```
 
 产物位于：`dist_nuitka/`
-- `dist_nuitka/大佐翻译官.exe`
-- `dist_nuitka/大佐翻译官.dist/`（依赖与资源）
+- `dist_nuitka/main.dist/大佐翻译官.exe`
+- `dist_nuitka/main.dist/`（依赖与资源）
+- `output/dazuofanyiguan_full.for.windows_<version>.zip`（Windows 在线更新全量包）
 
 ### 1.3 使用 Inno Setup 生成安装包
 1. 安装 [Inno Setup](https://jrsoftware.org/isinfo.php)
@@ -45,6 +47,8 @@ python -m nuitka `
 
 `setup.iss` 已配置：
 - 中文界面
+- 默认安装到当前用户目录：`%LOCALAPPDATA%\Programs\大佐翻译官`
+- 不沿用旧安装目录，避免旧版 Program Files 安装阻断普通用户迁移
 - 程序图标
 - 开始菜单快捷方式
 - 桌面快捷方式（可选）
@@ -154,13 +158,15 @@ dazuofanyiguan.dmg
 
 ### 3.5 按平台选择安装包
 - macOS：选择 `.dmg`
-- Windows：选择 `.exe` / `.msi`
+- Windows：只选择与 Release 版本精确匹配的 `dazuofanyiguan_full.for.windows_<version>.zip`
 - 若未找到对应资源，会提示错误
 
 ### 3.6 下载与安装行为
-- 安装包下载到临时目录
+- 更新包下载到 `~/.dzfyq/update_cache`
 - **macOS**：下载后打开 DMG，提示用户手动替换应用
-- **Windows**：下载后启动安装包并退出当前程序
+- **Windows**：下载 full zip 后解压到更新缓存目录，启动独立 PowerShell 替换脚本，当前程序退出
+- PowerShell 脚本会等待旧进程退出，备份当前安装目录到 `~/.dzfyq/update_backup`，再用全量目录覆盖安装并重启 `大佐翻译官.exe`
+- Windows 在线更新不会再启动 `.exe/.msi` 安装器；安装器仅用于首次安装或旧安装迁移
 
 ---
 
@@ -168,6 +174,7 @@ dazuofanyiguan.dmg
 - 打包路径尽量使用英文路径，避免 Qt 插件路径异常
 - 打包前确保虚拟环境已安装全部依赖
 - 更新依赖 Gitee 可访问性
+- Windows 静默替换要求安装目录可写；新安装器默认使用当前用户目录，旧版本若安装在 Program Files，需先用新版安装器迁移一次
 - macOS 全局快捷键需要辅助功能权限
 
 ---
@@ -175,7 +182,7 @@ dazuofanyiguan.dmg
 ## 5. 更新 FAQ
 
 **Q1：为什么提示“未找到安装包资源”？**
-- Release 里缺少当前平台对应后缀：mac 必须 `.dmg`，Windows 必须 `.exe/.msi`。
+- Release 里缺少当前平台对应资源：mac 必须 `.dmg`，Windows 必须上传与 Release 版本精确匹配的 `dazuofanyiguan_full.for.windows_<version>.zip`。
 
 **Q2：为什么更新检查失败（403/404）？**
 - 403：可能触发频率限制或权限不足。
@@ -189,3 +196,6 @@ dazuofanyiguan.dmg
 
 **Q5：为什么显示“已是最新版本”但我明明有新包？**
 - Release 的 `tag_name` 版本号必须高于当前 `APP_VERSION`，且格式需为 `x.y.z`。
+
+**Q6：Windows 静默更新为什么提示没有写入权限？**
+- 静默替换不会拉起安装器，也不会自动提权；如果旧版本安装在 Program Files，请先用新版安装器安装到默认用户目录，之后在线更新即可静默替换。

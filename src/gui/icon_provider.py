@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 
 from PyQt5.QtGui import QIcon
 
@@ -62,6 +63,38 @@ FALLBACK_SVG = {
 }
 
 
+def _candidate_resource_dirs():
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            yield os.path.join(meipass, "src", "ziyuan")
+
+        exe_dir = os.path.dirname(sys.executable)
+        yield os.path.join(exe_dir, "src", "ziyuan")
+
+        dist_dir = os.path.join(
+            exe_dir,
+            f"{os.path.splitext(os.path.basename(sys.executable))[0]}.dist",
+        )
+        yield os.path.join(dist_dir, "src", "ziyuan")
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    yield os.path.join(repo_root, "src", "ziyuan")
+    yield os.path.abspath(os.path.join(os.getcwd(), "src", "ziyuan"))
+
+
+def resource_dir() -> str:
+    candidates = list(_candidate_resource_dirs())
+    for candidate in candidates:
+        if os.path.isdir(candidate):
+            return candidate
+    return candidates[0]
+
+
+def resource_path(*parts: str) -> str:
+    return os.path.join(resource_dir(), *parts)
+
+
 def color_for_theme(theme_name: str, role: str = "text") -> str:
     palette = get_palette_by_theme(theme_name)
     if role == "secondary":
@@ -82,7 +115,13 @@ def themed_icon(name: str, theme_name: str = "dark", role: str = "text", fallbac
 
     fallback_name = FALLBACK_SVG.get(name)
     if fallback_name:
-        fallback_path = os.path.join(fallback_dir, fallback_name)
-        if os.path.exists(fallback_path):
-            return QIcon(fallback_path)
+        fallback_dirs = []
+        if fallback_dir and os.path.isdir(fallback_dir):
+            fallback_dirs.append(fallback_dir)
+        fallback_dirs.extend(_candidate_resource_dirs())
+
+        for base_dir in fallback_dirs:
+            fallback_path = os.path.join(base_dir, fallback_name)
+            if os.path.exists(fallback_path):
+                return QIcon(fallback_path)
     return QIcon()

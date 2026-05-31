@@ -1,6 +1,7 @@
 import asyncio
 import logging
 
+from src.gongju.fanyi import sanitize_error_message
 from src.gongju.fanyi_factory import build_translation_api
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,16 @@ async def init_translation_api(self):
     return await _init_translation_api(self)
 
 
+def _translation_error_secrets(self, api=None):
+    secrets = [
+        self.config.get("deepl.api_key", ""),
+        self.config.get("openai_compat.api_key", ""),
+    ]
+    if api is not None:
+        secrets.append(getattr(api, "api_key", ""))
+    return secrets
+
+
 async def _init_translation_api(self):
     new_api = None
     assigned = False
@@ -36,30 +47,29 @@ async def _init_translation_api(self):
         api_name = self.config.get("translation.api", "google")
         logger.info(f"正在初始化翻译API: {api_name}")
 
-        self.status_indicator.set_status("connecting", "正在连接...")
-        update_service_display(self)
-
         if hasattr(self, "translator_vm"):
             await self.translator_vm.cancel_and_wait(clear_output=False)
 
-        await self.fanyi.close_current_api()
+        self.status_indicator.set_status("connecting", "正在连接...")
+        update_service_display(self)
+
         new_api = build_translation_api(self.config)
+        await new_api.health_check()
 
-        try:
-            await new_api.health_check()
-            self.fanyi.set_fanyi_jiekou(new_api)
-            assigned = True
-            self.status_indicator.set_status("normal", "已连接")
+        if hasattr(self.fanyi, "replace_fanyi_jiekou"):
+            await self.fanyi.replace_fanyi_jiekou(new_api, api_name=api_name)
+        else:
+            await self.fanyi.close_current_api()
+            self.fanyi.set_fanyi_jiekou(new_api, api_name=api_name)
 
-            if self.input_text.toPlainText():
-                self.translator_vm.translate_now(self.input_text.toPlainText(), self._get_vm_context())
-        except Exception:
-            await new_api.close()
-            self.status_indicator.set_status("error", "连接失败")
-            raise
+        assigned = True
+        self.status_indicator.set_status("normal", "已连接")
+
+        if self.input_text.toPlainText():
+            self.translator_vm.translate_now(self.input_text.toPlainText(), self._get_vm_context())
 
     except Exception as error:
-        error_msg = str(error)
+        error_msg = sanitize_error_message(error, _translation_error_secrets(self, new_api))
         if "API密钥" in error_msg:
             self.status_indicator.set_status("error", "未设置API密钥")
         elif "无法连接" in error_msg or "网络错误" in error_msg:
@@ -67,7 +77,7 @@ async def _init_translation_api(self):
         else:
             self.status_indicator.set_status("error", "连接失败")
 
-        logger.error(f"初始化翻译API出错: {error_msg}")
+        logger.error("初始化翻译API出错: %s", error_msg)
         if hasattr(self, "tishi"):
             self.tishi.showMessage(f"API连接失败: {error_msg}", type="error")
         update_service_display(self)

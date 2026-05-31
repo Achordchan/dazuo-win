@@ -59,6 +59,7 @@ class GoogleAPI(FanYiJieKou):
             connect=5,
             sock_read=5
         )
+        self._ssl_context = ssl.create_default_context(cafile=certifi.where())
         
         # 并发控制
         self._semaphore = asyncio.Semaphore(5)
@@ -74,7 +75,7 @@ class GoogleAPI(FanYiJieKou):
                 enable_cleanup_closed=True,
                 keepalive_timeout=30.0,
                 ttl_dns_cache=300,
-                ssl=False  # 禁用SSL验证以提高速度
+                ssl=self._ssl_context
             )
             
             self.session = aiohttp.ClientSession(
@@ -160,6 +161,8 @@ class GoogleAPI(FanYiJieKou):
                                     return translated_text.strip(), detected_lang
                                 
                             raise ValueError(f"翻译服务器返回错误: HTTP {response.status}")
+                    except aiohttp.ClientConnectorCertificateError as e:
+                        raise ValueError("Google 翻译证书校验失败，请检查代理或证书设置") from e
                     except aiohttp.ClientConnectorError:
                         raise ValueError("无法连接到 Google 翻译服务，请检查网络连接或代理设置")
                     except aiohttp.ClientError as e:

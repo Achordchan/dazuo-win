@@ -13,6 +13,7 @@ from PyQt5.QtCore import QSharedMemory, QTimer
 from PyQt5.QtGui import QFont, QIcon
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
+from src.gongju.autostart import configure_autostart, is_autostart_enabled
 from src.gui.dialog_utils import build_dialog_stylesheet_for_theme
 from src.shezhi import Config
 
@@ -234,10 +235,29 @@ def create_async_loop(app: QApplication):
     return loop
 
 
+def repair_autostart_if_needed() -> None:
+    try:
+        config = Config()
+        if not config.get("auto_start", False):
+            return
+        if is_autostart_enabled():
+            return
+        configure_autostart(True)
+        logging.info("已修复开机自启入口")
+    except Exception as error:
+        logging.error(f"修复开机自启入口失败: {error}")
+
+
 def enforce_single_instance() -> Optional[QSharedMemory]:
     shared_memory = QSharedMemory("DaZaoFanYiGuanSingleInstance")
     if shared_memory.create(1):
         return shared_memory
+
+    stale_segment = QSharedMemory("DaZaoFanYiGuanSingleInstance")
+    if stale_segment.attach():
+        stale_segment.detach()
+        if shared_memory.create(1):
+            return shared_memory
 
     message_box = QMessageBox()
     message_box.setWindowTitle("程序已在运行")
@@ -295,6 +315,7 @@ def main():
         if shared_memory is None:
             return
 
+        repair_autostart_if_needed()
         window = create_main_window()
         app.window = window
         app.shared_memory = shared_memory

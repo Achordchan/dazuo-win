@@ -1,6 +1,8 @@
 import copy
 import json
 import os
+import tempfile
+import time
 from typing import Any, Dict
 
 from .config_defaults import build_default_config
@@ -29,10 +31,30 @@ class Config:
         try:
             with open(self.config_file, "r", encoding="utf-8") as file:
                 data = json.load(file)
-                return data if isinstance(data, dict) else {}
+            if isinstance(data, dict):
+                return data
+            print("配置文件内容不是 JSON 对象，按损坏配置处理")
+            self._backup_invalid_config()
+            return {}
         except Exception as error:
             print(f"加载配置文件失败: {error}")
+            self._backup_invalid_config()
             return {}
+
+    def _backup_invalid_config(self) -> None:
+        if not os.path.exists(self.config_file):
+            return
+        try:
+            backup_base = f"{self.config_file}.invalid.{time.strftime('%Y%m%d_%H%M%S')}"
+            backup_path = f"{backup_base}.bak"
+            index = 1
+            while os.path.exists(backup_path):
+                backup_path = f"{backup_base}.{index}.bak"
+                index += 1
+            os.replace(self.config_file, backup_path)
+            print(f"已备份损坏配置文件: {backup_path}")
+        except Exception as error:
+            print(f"备份损坏配置文件失败: {error}")
 
     def _merge_dicts(self, defaults: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
         merged = copy.deepcopy(defaults)
@@ -86,8 +108,14 @@ class Config:
     def _validate_config(self, config: Dict[str, Any]) -> bool:
         changed = False
         translation = config.setdefault("translation", {})
+        if not isinstance(translation, dict):
+            config["translation"] = copy.deepcopy(self._default_config["translation"])
+            return True
         if translation.get("source_lang") != "自动检测":
             translation["source_lang"] = "自动检测"
+            changed = True
+        if translation.get("target_lang") == "中文":
+            translation["target_lang"] = "简体中文"
             changed = True
         return changed
 
@@ -134,11 +162,26 @@ class Config:
             self._save_if_changed(previous)
 
     def save(self) -> None:
+        temp_path = ""
         try:
             self._ensure_config_dir()
-            with open(self.config_file, "w", encoding="utf-8") as file:
+            fd, temp_path = tempfile.mkstemp(
+                prefix="config.",
+                suffix=".tmp",
+                dir=self.config_dir,
+                text=True,
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
                 json.dump(self._config, file, ensure_ascii=False, indent=4)
+                file.write("\n")
+            os.replace(temp_path, self.config_file)
         except Exception as error:
+            if temp_path:
+                try:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                except OSError:
+                    pass
             print(f"保存配置文件失败: {error}")
 
     def reset(self) -> None:

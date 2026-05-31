@@ -5,6 +5,8 @@ from typing import Optional
 
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
+from ..gongju.fanyi import sanitize_error_message
+
 
 @dataclass(frozen=True)
 class TranslationContext:
@@ -234,7 +236,7 @@ class TranslatorViewModel(QObject):
             if token != self._active_token:
                 return
 
-            msg = str(e)
+            msg = self._safe_error_message(e)
             self.error_message_changed.emit(msg)
             self.toast_message.emit(msg, "error")
         finally:
@@ -303,3 +305,8 @@ class TranslatorViewModel(QObject):
                 cjk += 1
         other = max(0, len(text) - cjk)
         return cjk + int((other + 3) / 4)
+
+    def _safe_error_message(self, error: Exception) -> str:
+        api = getattr(self._fanyi, "_fanyi_jiekou", None)
+        secrets = [getattr(api, "api_key", "")]
+        return sanitize_error_message(error, secrets)

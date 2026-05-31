@@ -1,10 +1,13 @@
 import os
 import sys
-import json
 import aiohttp
 import asyncio
 import logging
+import re
 import subprocess
+import shutil
+import time
+import zipfile
 from PyQt5.QtCore import QObject, pyqtSignal
 from src.version import APP_VERSION
 
@@ -27,7 +30,9 @@ class Updater(QObject):
         self.release_notes = None
         self.force_update = False
         self.asset_suffix = None
+        self.latest_version = None
         self._download_dir = os.path.join(os.path.expanduser("~/.dzfyq"), "update_cache")
+        self._backup_root = os.path.join(os.path.expanduser("~/.dzfyq"), "update_backup")
         self._cleanup_download_cache()
 
     def _ensure_download_dir(self) -> None:
@@ -38,12 +43,15 @@ class Updater(QObject):
         keep_path = os.path.abspath(keep_file) if keep_file else None
         for name in os.listdir(self._download_dir):
             file_path = os.path.join(self._download_dir, name)
-            if not os.path.isfile(file_path):
-                continue
             if keep_path and os.path.abspath(file_path) == keep_path:
                 continue
             try:
-                os.remove(file_path)
+                if os.path.isdir(file_path):
+                    shutil.rmtree(file_path)
+                elif os.path.isfile(file_path):
+                    os.remove(file_path)
+                else:
+                    continue
                 logger.info(f"已清理旧更新包: {file_path}")
             except OSError as error:
                 logger.warning(f"清理旧更新包失败: {file_path}, {error}")
@@ -53,6 +61,326 @@ class Updater(QObject):
         normalized_suffix = suffix if suffix.startswith(".") else f".{suffix}"
         filename = f"dazuofanyiguan_update{normalized_suffix}"
         return os.path.join(self._download_dir, filename)
+
+    def _expected_windows_full_update_asset_names(self, version: str) -> set[str]:
+        normalized_version = (version or "").strip().lower().lstrip("v")
+        if not normalized_version:
+            return set()
+        return {
+            f"dazuofanyiguan_full.for.windows_{normalized_version}.zip",
+            f"dazuofanyiguan_full.for.windows_v{normalized_version}.zip",
+        }
+
+    def _is_windows_full_update_asset(self, asset_name: str, version: str | None = None) -> bool:
+        normalized = os.path.basename(asset_name).lower()
+        if version:
+            return normalized in self._expected_windows_full_update_asset_names(version)
+        return re.fullmatch(
+            r"dazuofanyiguan_full\.for\.windows(?:_v?)?\d+(?:\.\d+){1,3}\.zip",
+            normalized,
+        ) is not None
+
+    def _sanitize_name(self, value: str | None) -> str:
+        safe = "".join(char if char.isalnum() or char in "._-" else "_" for char in (value or ""))
+        return safe.strip("._-") or str(int(time.time()))
+
+    def _is_frozen_app(self) -> bool:
+        return bool(getattr(sys, "frozen", False) or globals().get("__compiled__"))
+
+    def _current_exe_name(self) -> str:
+        return os.path.basename(sys.executable) or "大佐翻译官.exe"
+
+    def _ensure_target_writable(self, target_dir: str) -> None:
+        probe_path = os.path.join(target_dir, f".update_write_test_{os.getpid()}.tmp")
+        try:
+            with open(probe_path, "w", encoding="utf-8") as probe_file:
+                probe_file.write("ok")
+        except PermissionError as error:
+            raise PermissionError(
+                "当前安装目录没有写入权限，无法静默替换更新。"
+                "请先用安装包安装到用户目录，之后即可使用静默更新。"
+            ) from error
+        finally:
+            try:
+                if os.path.exists(probe_path):
+                    os.remove(probe_path)
+            except OSError:
+                pass
+
+    def _ensure_safe_replace_paths(self, source_dir: str, target_dir: str) -> None:
+        source_abs = os.path.abspath(source_dir)
+        target_abs = os.path.abspath(target_dir)
+        current_exe = os.path.abspath(sys.executable)
+
+        if source_abs == target_abs:
+            raise RuntimeError("更新源目录和安装目录相同，已终止更新。")
+        try:
+            common_path = os.path.commonpath([source_abs, target_abs])
+            if common_path in {source_abs, target_abs}:
+                raise RuntimeError("更新源目录和安装目录存在嵌套关系，已终止更新。")
+        except ValueError:
+            # Windows 跨盘安装是正常场景，robocopy 支持跨盘复制；这里只跳过嵌套检查。
+            pass
+        if os.path.abspath(os.path.dirname(target_abs)) == target_abs:
+            raise RuntimeError("安装目录解析异常，已终止更新。")
+        if not os.path.isfile(current_exe):
+            raise RuntimeError("当前主程序路径不存在，已终止更新。")
+        try:
+            if os.path.commonpath([target_abs, current_exe]) != target_abs:
+                raise RuntimeError("当前主程序不在安装目录内，已终止更新。")
+        except ValueError as error:
+            raise RuntimeError("当前主程序路径异常，已终止更新。") from error
+
+    def _safe_extract_zip(self, zip_path: str, extract_dir: str) -> None:
+        extract_root = os.path.abspath(extract_dir)
+        with zipfile.ZipFile(zip_path, "r") as archive:
+            for member in archive.infolist():
+                member_target = os.path.abspath(os.path.join(extract_root, member.filename))
+                try:
+                    if os.path.commonpath([extract_root, member_target]) != extract_root:
+                        raise RuntimeError("更新包包含非法路径，已终止更新。")
+                except ValueError as error:
+                    raise RuntimeError("更新包包含非法路径，已终止更新。") from error
+            archive.extractall(extract_root)
+
+    def _validate_update_source_dir(self, source_dir: str, exe_name: str) -> tuple[str, str]:
+        exe_path = os.path.join(source_dir, exe_name)
+        resource_dir = os.path.join(source_dir, "src", "ziyuan")
+        icon_path = os.path.join(resource_dir, "logo.ico")
+        if not os.path.isfile(exe_path):
+            raise RuntimeError("更新包内未找到主程序，请确认上传的是完整运行目录 zip。")
+        if not os.path.isdir(resource_dir) or not os.path.isfile(icon_path):
+            raise RuntimeError("更新包缺少 src/ziyuan 资源目录，请确认上传的是完整运行目录 zip。")
+        return source_dir, exe_name
+
+    def _find_update_source_dir(self, extract_dir: str, exe_name: str) -> tuple[str, str]:
+        candidates = [exe_name, "大佐翻译官.exe"]
+
+        for candidate in candidates:
+            if os.path.isfile(os.path.join(extract_dir, candidate)):
+                return self._validate_update_source_dir(extract_dir, candidate)
+
+        entries = [
+            os.path.join(extract_dir, name)
+            for name in os.listdir(extract_dir)
+            if os.path.isdir(os.path.join(extract_dir, name))
+        ]
+        files = [
+            name
+            for name in os.listdir(extract_dir)
+            if os.path.isfile(os.path.join(extract_dir, name))
+        ]
+        if len(entries) == 1 and not files:
+            for candidate in candidates:
+                if os.path.isfile(os.path.join(entries[0], candidate)):
+                    return self._validate_update_source_dir(entries[0], candidate)
+
+        raise RuntimeError("更新包内未找到主程序，请确认上传的是完整运行目录 zip。")
+
+    def _prepare_full_update_source(self, file_path: str) -> tuple[str, str]:
+        if not zipfile.is_zipfile(file_path):
+            raise RuntimeError("更新包不是有效的 zip 文件。")
+
+        version_name = self._sanitize_name(self.latest_version or self.current_version)
+        extract_dir = os.path.join(self._download_dir, f"full_update_{version_name}")
+        if os.path.exists(extract_dir):
+            shutil.rmtree(extract_dir)
+        os.makedirs(extract_dir, exist_ok=True)
+
+        self._safe_extract_zip(file_path, extract_dir)
+        return self._find_update_source_dir(extract_dir, self._current_exe_name())
+
+    def _write_apply_script(self, script_path: str) -> None:
+        script = r'''param(
+    [Parameter(Mandatory=$true)][string]$SourceDir,
+    [Parameter(Mandatory=$true)][string]$TargetDir,
+    [Parameter(Mandatory=$true)][string]$ExeName,
+    [Parameter(Mandatory=$true)][int]$ProcessId,
+    [Parameter(Mandatory=$true)][string]$BackupDir,
+    [Parameter(Mandatory=$true)][string]$LogPath
+)
+
+$ErrorActionPreference = "Stop"
+$backupCompleted = $false
+
+function Write-UpdateLog {
+    param([string]$Message)
+    $parent = Split-Path -Parent $LogPath
+    if ($parent) {
+        [System.IO.Directory]::CreateDirectory($parent) | Out-Null
+    }
+    $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message"
+    Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+}
+
+function Invoke-RobocopyChecked {
+    param(
+        [string]$From,
+        [string]$To,
+        [string]$Phase,
+        [switch]$Mirror
+    )
+
+    $copyMode = if ($Mirror) { "/MIR" } else { "/E" }
+    Write-UpdateLog "$Phase from [$From] to [$To] with $copyMode"
+    & robocopy $From $To $copyMode /R:3 /W:1 /NFL /NDL /NJH /NJS /NP
+    $code = $LASTEXITCODE
+    Write-UpdateLog "$Phase robocopy exit code: $code"
+    if ($code -gt 7) {
+        throw "$Phase failed with robocopy exit code $code"
+    }
+}
+
+function Restore-UninstallerFiles {
+    param(
+        [string]$From,
+        [string]$To
+    )
+
+    foreach ($pattern in @("unins*.exe", "unins*.dat", "unins*.msg")) {
+        Get-ChildItem -LiteralPath $From -Filter $pattern -File -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $To $_.Name) -Force
+                Write-UpdateLog "Preserved uninstaller file: $($_.Name)"
+            }
+    }
+}
+
+function Start-TargetAppIfStopped {
+    param([string]$Reason)
+
+    if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+        Write-UpdateLog "Skip restart because old process is still running."
+        return
+    }
+
+    $targetExe = Join-Path $TargetDir $ExeName
+    if (Test-Path -LiteralPath $targetExe -PathType Leaf) {
+        Start-Process -FilePath $targetExe -WorkingDirectory $TargetDir
+        Write-UpdateLog "Started target app $Reason."
+    }
+    else {
+        Write-UpdateLog "Cannot restart app; executable not found: $targetExe"
+    }
+}
+
+try {
+    Write-UpdateLog "Update started."
+    if (-not (Test-Path -LiteralPath $SourceDir -PathType Container)) {
+        throw "SourceDir not found: $SourceDir"
+    }
+    if (-not (Test-Path -LiteralPath $TargetDir -PathType Container)) {
+        throw "TargetDir not found: $TargetDir"
+    }
+
+    $newExe = Join-Path $SourceDir $ExeName
+    if (-not (Test-Path -LiteralPath $newExe -PathType Leaf)) {
+        throw "New executable not found: $newExe"
+    }
+
+    $deadline = (Get-Date).AddSeconds(60)
+    while (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+        if ((Get-Date) -gt $deadline) {
+            throw "Timed out waiting for process $ProcessId to exit."
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    if (Test-Path -LiteralPath $BackupDir) {
+        Remove-Item -LiteralPath $BackupDir -Recurse -Force
+    }
+    [System.IO.Directory]::CreateDirectory($BackupDir) | Out-Null
+
+    Invoke-RobocopyChecked -From $TargetDir -To $BackupDir -Phase "backup" -Mirror
+    $backupCompleted = $true
+    Invoke-RobocopyChecked -From $SourceDir -To $TargetDir -Phase "update" -Mirror
+    Restore-UninstallerFiles -From $BackupDir -To $TargetDir
+
+    $targetExe = Join-Path $TargetDir $ExeName
+    if (-not (Test-Path -LiteralPath $targetExe -PathType Leaf)) {
+        throw "Updated executable not found: $targetExe"
+    }
+
+    Start-Process -FilePath $targetExe -WorkingDirectory $TargetDir
+    Write-UpdateLog "Update completed and app restarted."
+    exit 0
+}
+catch {
+    Write-UpdateLog "Update failed: $($_.Exception.Message)"
+    try {
+        if ($backupCompleted -and (Test-Path -LiteralPath $BackupDir -PathType Container)) {
+            Invoke-RobocopyChecked -From $BackupDir -To $TargetDir -Phase "restore" -Mirror
+            Write-UpdateLog "Restore completed."
+        }
+        else {
+            Write-UpdateLog "Backup did not complete; target directory was left unchanged."
+        }
+    }
+    catch {
+        Write-UpdateLog "Restore failed: $($_.Exception.Message)"
+    }
+    Start-TargetAppIfStopped -Reason "after update failure"
+    exit 1
+}
+'''
+        with open(script_path, "w", encoding="utf-8-sig", newline="\r\n") as script_file:
+            script_file.write(script)
+
+    def _apply_windows_full_update(self, file_path: str) -> None:
+        if not self._is_frozen_app():
+            raise RuntimeError("开发模式不支持静默替换，请使用打包版本验证。")
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"更新包不存在: {file_path}")
+
+        target_dir = os.path.dirname(os.path.abspath(sys.executable))
+        self._ensure_target_writable(target_dir)
+
+        source_dir, exe_name = self._prepare_full_update_source(file_path)
+        self._ensure_safe_replace_paths(source_dir, target_dir)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        version_name = self._sanitize_name(self.latest_version or self.current_version)
+        os.makedirs(self._backup_root, exist_ok=True)
+
+        backup_dir = os.path.join(self._backup_root, f"{version_name}_{timestamp}")
+        script_path = os.path.join(self._download_dir, f"apply_update_{version_name}_{timestamp}.ps1")
+        log_path = os.path.join(self._download_dir, f"apply_update_{version_name}_{timestamp}.log")
+        self._write_apply_script(script_path)
+
+        env = os.environ.copy()
+        env.pop("__COMPAT_LAYER", None)
+        env.pop("COMPAT_LAYER", None)
+
+        command = [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+            script_path,
+            "-SourceDir",
+            source_dir,
+            "-TargetDir",
+            target_dir,
+            "-ExeName",
+            exe_name,
+            "-ProcessId",
+            str(os.getpid()),
+            "-BackupDir",
+            backup_dir,
+            "-LogPath",
+            log_path,
+        ]
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(
+            command,
+            shell=False,
+            env=env,
+            cwd=self._download_dir,
+            creationflags=creationflags,
+        )
+        sys.exit(0)
 
     def discard_downloaded_update(self, file_path: str) -> None:
         if not file_path:
@@ -67,6 +395,9 @@ class Updater(QObject):
     async def check_update(self):
         """检查是否有新版本可用"""
         try:
+            self.update_url = None
+            self.asset_suffix = None
+            self.latest_version = None
             logger.info("开始检查更新...")
             async with aiohttp.ClientSession() as session:
                 logger.info(f"正在请求 Gitee API: {self.gitee_api}")
@@ -98,6 +429,7 @@ class Updater(QObject):
                     # 比较版本号
                     if self._compare_versions(latest_version, self.current_version) > 0:
                         logger.info(f"发现新版本: {latest_version}")
+                        self.latest_version = latest_version
                         
                         # 获取更新信息
                         self.release_notes = data.get('body') or "暂无更新说明"
@@ -115,7 +447,7 @@ class Updater(QObject):
                         if sys.platform == "darwin":
                             platform_suffixes = [".dmg"]
                         elif sys.platform == "win32":
-                            platform_suffixes = [".exe", ".msi"]
+                            platform_suffixes = [".zip"]
                         else:
                             self.update_error.emit("暂不支持该平台自动更新。")
                             return False
@@ -123,7 +455,11 @@ class Updater(QObject):
                         for asset in data.get('assets', []):
                             asset_name = (asset.get('name') or "").lower()
                             logger.info(f"检查资源: {asset_name}")
-                            if any(asset_name.endswith(suffix) for suffix in platform_suffixes):
+                            if sys.platform == "win32":
+                                asset_matched = self._is_windows_full_update_asset(asset_name, latest_version)
+                            else:
+                                asset_matched = any(asset_name.endswith(suffix) for suffix in platform_suffixes)
+                            if asset_matched:
                                 self.update_url = asset.get('browser_download_url')
                                 self.asset_suffix = os.path.splitext(asset_name)[1]
                                 if self.update_url:
@@ -135,7 +471,13 @@ class Updater(QObject):
                             self.update_available.emit(latest_version, clean_notes, self.force_update)
                             return True
                         suffix_text = "/".join(platform_suffixes)
-                        self.update_error.emit(f"未找到安装包资源，请在 Gitee Release 中上传 {suffix_text} 文件")
+                        if sys.platform == "win32":
+                            self.update_error.emit(
+                                "未找到 Windows 全量更新包，请在 Gitee Release 中上传 "
+                                "dazuofanyiguan_full.for.windows_<version>.zip"
+                            )
+                        else:
+                            self.update_error.emit(f"未找到安装包资源，请在 Gitee Release 中上传 {suffix_text} 文件")
                         return False
                     else:
                         logger.info("当前已是最新版本")
@@ -158,7 +500,7 @@ class Updater(QObject):
 
         temp_path = ""
         try:
-            suffix = self.asset_suffix or (".dmg" if sys.platform == "darwin" else ".exe")
+            suffix = self.asset_suffix or (".dmg" if sys.platform == "darwin" else ".zip")
             temp_path = self._build_download_path(suffix)
             self._cleanup_download_cache(keep_file=temp_path)
             if os.path.exists(temp_path):
@@ -167,7 +509,7 @@ class Updater(QObject):
             async with aiohttp.ClientSession() as session:
                 async with session.get(self.update_url) as response:
                     if response.status == 404:
-                        self.update_error.emit("下载失败：安装包资源不存在（HTTP 404）。")
+                        self.update_error.emit("下载失败：更新包资源不存在（HTTP 404）。")
                         return
                     if response.status == 403:
                         self.update_error.emit("下载失败：下载被拒绝或频率限制（HTTP 403）。")
@@ -206,39 +548,29 @@ class Updater(QObject):
                 subprocess.Popen(["open", file_path])
                 return
 
-            if not os.path.exists(file_path):
-                raise FileNotFoundError(f"安装包不存在: {file_path}")
+            if sys.platform == "win32":
+                self._apply_windows_full_update(file_path)
+                return
 
-            # 清理兼容层，避免错误识别系统版本（如误报需要 Win7 SP1）
-            env = os.environ.copy()
-            env.pop("__COMPAT_LAYER", None)
-            env.pop("COMPAT_LAYER", None)
-
-            # 使用subprocess启动安装程序（避免 shell 继承兼容层）
-            if file_path.lower().endswith(".msi"):
-                subprocess.Popen(["msiexec", "/i", file_path], shell=False, env=env)
-            else:
-                subprocess.Popen([file_path], shell=False, env=env)
-            # 退出当前程序
-            sys.exit(0)
+            self.update_error.emit("暂不支持该平台自动更新。")
         except Exception as e:
             logger.error(f"安装更新出错: {e}")
             self.update_error.emit(f"安装更新失败: {str(e)}")
 
     def _compare_versions(self, version1, version2):
         """比较版本号，返回1表示version1更新，-1表示version2更新，0表示相同"""
-        v1_parts = list(map(int, version1.split('.')))
-        v2_parts = list(map(int, version2.split('.')))
-        
-        # 补齐版本长度
-        while len(v1_parts) < 3:
-            v1_parts.append(0)
-        while len(v2_parts) < 3:
-            v2_parts.append(0)
-        
-        for i in range(3):
-            if v1_parts[i] > v2_parts[i]:
+        v1_parts = self._version_parts(version1)
+        v2_parts = self._version_parts(version2)
+
+        for left, right in zip(v1_parts, v2_parts):
+            if left > right:
                 return 1
-            elif v1_parts[i] < v2_parts[i]:
+            if left < right:
                 return -1
         return 0
+
+    def _version_parts(self, version: str) -> tuple[int, int, int]:
+        numbers = [int(part) for part in re.findall(r"\d+", str(version or ""))]
+        while len(numbers) < 3:
+            numbers.append(0)
+        return tuple(numbers[:3])

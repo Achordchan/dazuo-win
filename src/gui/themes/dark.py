@@ -1,11 +1,11 @@
-﻿"""
+"""
 深色主题样式表
 """
 
 STYLE = """
 QWidget {
     color: #FFFFFF;
-    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-family: "SimHei";
     font-size: 14px;
 }
 
@@ -17,7 +17,7 @@ QTextEdit {
     font-size: 16px;
     line-height: 1.8;
     color: #FFFFFF;
-    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-family: "SimHei";
     selection-background-color: #0A84FF;
     selection-color: #FFFFFF;
 }
@@ -28,7 +28,7 @@ QTextEdit:focus {
 }
 
 QTextEdit[readOnly="true"] {
-    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-family: "SimHei";
     color: #E8E8E8;
     font-size: 16px;
     line-height: 1.8;
@@ -43,7 +43,7 @@ QPushButton {
     font-size: 15px;
     font-weight: 500;
     min-width: 80px;
-    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-family: "SimHei";
 }
 
 QPushButton:hover {
@@ -61,7 +61,7 @@ QComboBox {
     min-width: 150px;
     background-color: #2D2D2D;
     color: #FFFFFF;
-    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-family: "SimHei";
     font-size: 15px;
 }
 
@@ -92,7 +92,7 @@ QComboBox QAbstractItemView {
     padding: 4px;
     selection-background-color: #0A84FF;
     selection-color: #FFFFFF;
-    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-family: "SimHei";
     font-size: 15px;
 }
 
@@ -100,7 +100,7 @@ QLabel {
     color: #FFFFFF;
     font-size: 15px;
     padding: 4px 0;
-    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-family: "SimHei";
 }
 
 QLabel#serviceDisplayPill {
@@ -472,7 +472,7 @@ QPushButton[toolTip="还原"] {
     background: transparent;
     border: none;
     color: #CCCCCC;
-    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-family: "SimHei";
     font-size: 16px;
     padding: 0;
     min-width: 32px;
@@ -495,7 +495,7 @@ QPushButton[toolTip="关闭"] {
     background: transparent;
     border: none;
     color: #CCCCCC;
-    font-family: "SimHei", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-family: "SimHei";
     font-size: 16px;
     padding: 0;
     min-width: 32px;

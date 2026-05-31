@@ -5,6 +5,7 @@ import os
 
 from PyQt5.QtWidgets import QMenu, QSystemTrayIcon, QShortcut
 from PyQt5.QtGui import QIcon, QKeySequence
+from PyQt5.QtCore import Qt
 
 from .dialog_utils import build_menu_stylesheet
 
@@ -31,14 +32,17 @@ def init_tray(self):
     # 添加显示/隐藏Mini窗口选项
     self.toggle_mini_window_action = self.tray_menu.addAction("显示/隐藏Mini窗口 (Alt+H)")
     self.toggle_mini_window_action.triggered.connect(self.toggle_mini_window)
-    self.toggle_mini_window_action.setEnabled(False)  # 默认禁用
+    self.toggle_mini_window_action.setEnabled(self.config.get("mini_mode", False))
     
     # 添加Mini模式快捷键
     self.mini_mode_shortcut = QShortcut(QKeySequence("Alt+M"), self)
+    self.mini_mode_shortcut.setContext(Qt.ApplicationShortcut)
     self.mini_mode_shortcut.activated.connect(self._toggle_mini_mode_shortcut)
     
     # 添加显示/隐藏Mini窗口快捷键
     self.toggle_mini_window_shortcut = QShortcut(QKeySequence("Alt+H"), self)
+    self.toggle_mini_window_shortcut.setContext(Qt.ApplicationShortcut)
+    self.toggle_mini_window_shortcut.setEnabled(self.config.get("mini_mode", False))
     self.toggle_mini_window_shortcut.activated.connect(self.toggle_mini_window)
     
     # 添加分隔线

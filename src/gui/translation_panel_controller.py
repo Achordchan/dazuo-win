@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 class TranslationPanelController:
     def __init__(self, main_window):
         self.main_window = main_window
+        self._active_error_message = None
 
     def bind_view_model(self) -> None:
         vm = self.main_window.translator_vm
@@ -82,17 +83,23 @@ class TranslationPanelController:
             return
 
         self.main_window.output_text.stop_loading()
-        self.main_window.status_indicator.set_status("normal")
+        if self._active_error_message:
+            self.main_window.status_indicator.set_status("error", self._active_error_message)
+        else:
+            self.main_window.status_indicator.set_status("normal")
         self.main_window.ai_status_bar.stop()
 
     def on_error_message_changed(self, message) -> None:
         if message:
+            self._active_error_message = str(message)
             self.main_window.output_text.stop_loading()
             self.main_window.switch_button.setEnabled(False)
-            self.main_window.status_indicator.set_status("error", str(message))
+            self.main_window.status_indicator.set_status("error", self._active_error_message)
             return
 
-        self.main_window.status_indicator.set_status("normal")
+        self._active_error_message = None
+        if not getattr(self.main_window.translator_vm, "_is_translating", False):
+            self.main_window.status_indicator.set_status("normal")
 
     def on_detected_source_language_changed(self, detected_lang) -> None:
         if not detected_lang:
