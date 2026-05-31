@@ -301,12 +301,20 @@ class ZhuChuangKou(QMainWindow):
 
     def reload_translation_api(self):
         loop = asyncio.get_event_loop()
-        if hasattr(self, '_init_translation_api_task') and self._init_translation_api_task:
-            try:
-                self._init_translation_api_task.cancel()
-            except Exception:
-                pass
-        self._init_translation_api_task = loop.create_task(self._init_translation_api())
+        existing_task = getattr(self, "_init_translation_api_task", None)
+
+        async def reload_once():
+            if existing_task and not existing_task.done():
+                existing_task.cancel()
+                try:
+                    await existing_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as error:
+                    logger.debug("等待旧翻译初始化任务结束失败: %s", error)
+            await self._init_translation_api()
+
+        self._init_translation_api_task = loop.create_task(reload_once())
     
     def _create_ui(self):
         """创建界面"""
@@ -641,9 +649,16 @@ class ZhuChuangKou(QMainWindow):
             if settings_dialog.exec_() == QDialog.Accepted:
                 logger.info("设置已保存，重新加载设置")
                 default_hotkey = "command+c,c" if sys.platform == "darwin" else "ctrl+c,c"
+                old_hotkey = getattr(getattr(self, "hotkey_controller", None), "hotkey_listener", None)
+                old_hotkey_value = getattr(old_hotkey, "_hotkey", None)
                 hotkey = self.config.get("shortcuts.copy_translate", default_hotkey)
                 if hasattr(self, "hotkey_controller"):
-                    self.hotkey_controller.reload_hotkey(hotkey)
+                    try:
+                        self.hotkey_controller.reload_hotkey(hotkey)
+                    except Exception as error:
+                        if old_hotkey_value:
+                            self.config.set("shortcuts.copy_translate", old_hotkey_value)
+                        self.tishi.showMessage(f"快捷键设置失败，已保留旧快捷键: {error}", type="error")
 
                 theme_name = self.config.get("theme", "dark")
                 self._apply_theme(theme_name)
@@ -898,7 +913,12 @@ class ZhuChuangKou(QMainWindow):
             super().closeEvent(event)
             return
 
-        if hasattr(self, 'tray_icon') and self.tray_icon.isVisible():
+        tray_visible = (
+            getattr(self, "tray_available", False)
+            and hasattr(self, "tray_icon")
+            and self.tray_icon.isVisible()
+        )
+        if tray_visible:
             if sys.platform == "darwin" and self.config.get("show_in_dock", True):
                 event.accept()
                 super().closeEvent(event)
@@ -938,6 +958,8 @@ class ZhuChuangKou(QMainWindow):
 
         event.accept()
         super().closeEvent(event)
+        if not tray_visible:
+            QApplication.quit()
     
     def showEvent(self, event):
         """窗口显示事件"""

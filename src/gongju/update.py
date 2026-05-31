@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import aiohttp
 import asyncio
 import logging
@@ -33,6 +34,7 @@ class Updater(QObject):
         self.latest_version = None
         self._download_dir = os.path.join(os.path.expanduser("~/.dzfyq"), "update_cache")
         self._backup_root = os.path.join(os.path.expanduser("~/.dzfyq"), "update_backup")
+        self._state_dir = os.path.join(os.path.expanduser("~/.dzfyq"), "update_state")
         self._cleanup_download_cache()
 
     def _ensure_download_dir(self) -> None:
@@ -83,6 +85,14 @@ class Updater(QObject):
     def _sanitize_name(self, value: str | None) -> str:
         safe = "".join(char if char.isalnum() or char in "._-" else "_" for char in (value or ""))
         return safe.strip("._-") or str(int(time.time()))
+
+    def _last_update_result_path(self) -> str:
+        os.makedirs(self._state_dir, exist_ok=True)
+        return os.path.join(self._state_dir, "last_update_result.json")
+
+    def _pending_update_path(self) -> str:
+        os.makedirs(self._state_dir, exist_ok=True)
+        return os.path.join(self._state_dir, "pending_update.json")
 
     def _is_frozen_app(self) -> bool:
         return bool(getattr(sys, "frozen", False) or globals().get("__compiled__"))
@@ -153,6 +163,29 @@ class Updater(QObject):
             raise RuntimeError("更新包缺少 src/ziyuan 资源目录，请确认上传的是完整运行目录 zip。")
         return source_dir, exe_name
 
+    def _read_update_manifest_version(self, directory: str) -> str:
+        manifest_path = os.path.join(directory, "update_manifest.json")
+        if not os.path.isfile(manifest_path):
+            return ""
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as manifest_file:
+                manifest = json.load(manifest_file)
+        except Exception as error:
+            raise RuntimeError("更新包版本清单损坏，已终止更新。") from error
+        return str(manifest.get("app_version") or "").strip()
+
+    def _validate_update_manifest(self, source_dir: str) -> None:
+        expected_version = (self.latest_version or "").strip()
+        if not expected_version:
+            return
+        package_version = self._read_update_manifest_version(source_dir)
+        if not package_version:
+            raise RuntimeError("更新包缺少版本清单，已终止更新。")
+        if self._compare_versions(package_version, expected_version) != 0:
+            raise RuntimeError(
+                f"更新包版本不匹配：期望 v{expected_version}，实际 v{package_version}。"
+            )
+
     def _find_update_source_dir(self, extract_dir: str, exe_name: str) -> tuple[str, str]:
         candidates = [exe_name, "大佐翻译官.exe"]
 
@@ -188,7 +221,9 @@ class Updater(QObject):
         os.makedirs(extract_dir, exist_ok=True)
 
         self._safe_extract_zip(file_path, extract_dir)
-        return self._find_update_source_dir(extract_dir, self._current_exe_name())
+        source_dir, exe_name = self._find_update_source_dir(extract_dir, self._current_exe_name())
+        self._validate_update_manifest(source_dir)
+        return source_dir, exe_name
 
     def _write_apply_script(self, script_path: str) -> None:
         script = r'''param(
@@ -197,7 +232,10 @@ class Updater(QObject):
     [Parameter(Mandatory=$true)][string]$ExeName,
     [Parameter(Mandatory=$true)][int]$ProcessId,
     [Parameter(Mandatory=$true)][string]$BackupDir,
-    [Parameter(Mandatory=$true)][string]$LogPath
+    [Parameter(Mandatory=$true)][string]$LogPath,
+    [Parameter(Mandatory=$true)][string]$ResultPath,
+    [Parameter(Mandatory=$true)][string]$PendingPath,
+    [string]$ExpectedVersion = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -211,6 +249,26 @@ function Write-UpdateLog {
     }
     $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message"
     Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+}
+
+function Write-UpdateResult {
+    param(
+        [string]$Status,
+        [string]$Message
+    )
+
+    $parent = Split-Path -Parent $ResultPath
+    if ($parent) {
+        [System.IO.Directory]::CreateDirectory($parent) | Out-Null
+    }
+    $payload = [PSCustomObject]@{
+        status = $Status
+        message = $Message
+        expected_version = $ExpectedVersion
+        log_path = $LogPath
+        updated_at = (Get-Date).ToString("o")
+    }
+    $payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $ResultPath -Encoding UTF8
 }
 
 function Invoke-RobocopyChecked {
@@ -246,6 +304,41 @@ function Restore-UninstallerFiles {
     }
 }
 
+function Get-UpdateManifestVersion {
+    param([string]$Directory)
+
+    $manifestPath = Join-Path $Directory "update_manifest.json"
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        return ""
+    }
+    try {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        return [string]$manifest.app_version
+    }
+    catch {
+        throw "Update manifest is invalid: $($_.Exception.Message)"
+    }
+}
+
+function Assert-ExpectedVersion {
+    param(
+        [string]$Directory,
+        [string]$Phase
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ExpectedVersion)) {
+        return
+    }
+    $actualVersion = Get-UpdateManifestVersion -Directory $Directory
+    if ([string]::IsNullOrWhiteSpace($actualVersion)) {
+        throw "$Phase version verification failed: update_manifest.json is missing"
+    }
+    if ($actualVersion -ne $ExpectedVersion) {
+        throw "$Phase version verification failed: expected $ExpectedVersion but found $actualVersion"
+    }
+    Write-UpdateLog "$Phase version verified: $actualVersion"
+}
+
 function Start-TargetAppIfStopped {
     param([string]$Reason)
 
@@ -277,13 +370,20 @@ try {
     if (-not (Test-Path -LiteralPath $newExe -PathType Leaf)) {
         throw "New executable not found: $newExe"
     }
+    Assert-ExpectedVersion -Directory $SourceDir -Phase "source"
 
     $deadline = (Get-Date).AddSeconds(60)
     while (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
         if ((Get-Date) -gt $deadline) {
-            throw "Timed out waiting for process $ProcessId to exit."
+            Write-UpdateLog "Timed out waiting for process $ProcessId to exit; forcing termination."
+            Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+            Start-Sleep -Milliseconds 800
+            break
         }
         Start-Sleep -Milliseconds 500
+    }
+    if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+        throw "Process $ProcessId is still running after forced termination."
     }
 
     if (Test-Path -LiteralPath $BackupDir) {
@@ -300,9 +400,12 @@ try {
     if (-not (Test-Path -LiteralPath $targetExe -PathType Leaf)) {
         throw "Updated executable not found: $targetExe"
     }
+    Assert-ExpectedVersion -Directory $TargetDir -Phase "target"
 
     Start-Process -FilePath $targetExe -WorkingDirectory $TargetDir
     Write-UpdateLog "Update completed and app restarted."
+    Write-UpdateResult -Status "success" -Message "Update completed."
+    Remove-Item -LiteralPath $PendingPath -Force -ErrorAction SilentlyContinue
     exit 0
 }
 catch {
@@ -320,11 +423,23 @@ catch {
         Write-UpdateLog "Restore failed: $($_.Exception.Message)"
     }
     Start-TargetAppIfStopped -Reason "after update failure"
+    Write-UpdateResult -Status "failed" -Message $_.Exception.Message
+    Remove-Item -LiteralPath $PendingPath -Force -ErrorAction SilentlyContinue
     exit 1
 }
 '''
         with open(script_path, "w", encoding="utf-8-sig", newline="\r\n") as script_file:
             script_file.write(script)
+
+    def _write_pending_update_state(self, log_path: str) -> None:
+        state = {
+            "expected_version": self.latest_version or "",
+            "current_version": self.current_version,
+            "log_path": log_path,
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        }
+        with open(self._pending_update_path(), "w", encoding="utf-8") as state_file:
+            json.dump(state, state_file, ensure_ascii=False, indent=2)
 
     def _apply_windows_full_update(self, file_path: str) -> None:
         if not self._is_frozen_app():
@@ -343,8 +458,10 @@ catch {
 
         backup_dir = os.path.join(self._backup_root, f"{version_name}_{timestamp}")
         script_path = os.path.join(self._download_dir, f"apply_update_{version_name}_{timestamp}.ps1")
-        log_path = os.path.join(self._download_dir, f"apply_update_{version_name}_{timestamp}.log")
+        os.makedirs(self._state_dir, exist_ok=True)
+        log_path = os.path.join(self._state_dir, f"apply_update_{version_name}_{timestamp}.log")
         self._write_apply_script(script_path)
+        self._write_pending_update_state(log_path)
 
         env = os.environ.copy()
         env.pop("__COMPAT_LAYER", None)
@@ -371,6 +488,12 @@ catch {
             backup_dir,
             "-LogPath",
             log_path,
+            "-ResultPath",
+            self._last_update_result_path(),
+            "-PendingPath",
+            self._pending_update_path(),
+            "-ExpectedVersion",
+            str(self.latest_version or ""),
         ]
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         subprocess.Popen(
@@ -380,7 +503,7 @@ catch {
             cwd=self._download_dir,
             creationflags=creationflags,
         )
-        sys.exit(0)
+        os._exit(0)
 
     def discard_downloaded_update(self, file_path: str) -> None:
         if not file_path:

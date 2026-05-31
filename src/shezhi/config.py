@@ -11,14 +11,26 @@ from .config_defaults import build_default_config
 class Config:
     """配置管理类。"""
 
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self):
-        self.config_dir = os.path.expanduser("~/.dzfyq")
+        config_dir = os.path.expanduser("~/.dzfyq")
+        if getattr(self, "_initialized", False) and getattr(self, "config_dir", None) == config_dir:
+            return
+
+        self.config_dir = config_dir
         self.config_file = os.path.join(self.config_dir, "config.json")
         self._default_config = build_default_config()
         self._config: Dict[str, Any] = {}
 
         self._ensure_config_dir()
         self.load()
+        self._initialized = True
 
     def _ensure_config_dir(self) -> None:
         if not os.path.exists(self.config_dir):
@@ -87,6 +99,22 @@ class Config:
                 }
             }
             changed = True
+        else:
+            vendor = openai_compat.get("vendor")
+            if vendor and vendor not in profiles:
+                legacy_values = {
+                    "base_url": openai_compat.get("base_url"),
+                    "model": openai_compat.get("model"),
+                    "api_key": openai_compat.get("api_key"),
+                }
+                if any(value for value in legacy_values.values()):
+                    defaults = self._default_config["openai_compat"]
+                    profiles[vendor] = {
+                        "base_url": legacy_values["base_url"] or defaults["base_url"],
+                        "model": legacy_values["model"] or defaults["model"],
+                        "api_key": legacy_values["api_key"] or defaults["api_key"],
+                    }
+                    changed = True
 
         translation = config.setdefault("translation", {})
         if not isinstance(translation, dict):

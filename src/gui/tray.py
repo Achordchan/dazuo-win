@@ -11,6 +11,10 @@ from .dialog_utils import build_menu_stylesheet
 
 
 def init_tray(self):
+    self.tray_available = QSystemTrayIcon.isSystemTrayAvailable()
+    if not self.tray_available:
+        logger.warning("系统托盘不可用，关闭窗口时不会隐藏到托盘")
+
     # 创建系统托盘图标
     self.tray_icon = QSystemTrayIcon(self)
     self.tray_icon.setIcon(QIcon(os.path.join(self.resource_dir, 'logo.svg')))
@@ -71,4 +75,5 @@ def init_tray(self):
     self.tray_icon.activated.connect(self._on_tray_icon_activated)
     
     # 显示托盘图标
-    self.tray_icon.show()
+    if self.tray_available:
+        self.tray_icon.show()

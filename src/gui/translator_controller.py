@@ -89,3 +89,9 @@ async def _init_translation_api(self):
                 await new_api.close()
             except Exception:
                 pass
+        desired_api_name = self.config.get("translation.api", "google")
+        if not assigned and getattr(self.fanyi, "current_api_name", None) != desired_api_name:
+            try:
+                await self.fanyi.close_current_api()
+            except Exception as close_error:
+                logger.warning("关闭不匹配的旧翻译接口失败: %s", sanitize_error_message(close_error))

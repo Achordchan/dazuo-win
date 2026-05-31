@@ -537,8 +537,6 @@ class SheZhiChuangKou(QDialog):
             self.parent.config.set("openai_compat.model", self.model_input.text().strip())
             self.parent.config.set("openai_compat.api_key", self.api_key_input.text().strip())
             
-            self._notify_translation_settings_changed()
-            
             self.accept()
         except Exception as e:
             print(f"保存设置时出错: {e}")
@@ -783,13 +781,7 @@ class SheZhiChuangKou(QDialog):
         self.parent.config.set("openai_compat.profiles", profiles)
 
     def _notify_translation_settings_changed(self) -> None:
-        if hasattr(self.parent, "reload_translation_api"):
-            self.parent.reload_translation_api()
-            return
-
-        if hasattr(self.parent, '_init_translation_api'):
-            loop = asyncio.get_event_loop()
-            loop.create_task(self.parent._init_translation_api())
+        return
 
     def _sync_ai_settings_visibility(self):
         index = self.translation_api_combo.currentIndex()

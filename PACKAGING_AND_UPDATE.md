@@ -20,18 +20,28 @@ pip install -r requirements.txt
 .\build.bat
 
 # 或手动（PowerShell）
+$version = python -c "from src.version import APP_VERSION; print(APP_VERSION)"
 python -m nuitka `
   --standalone `
   --windows-disable-console `
   --output-dir=dist_nuitka `
   --output-filename="大佐翻译官.exe" `
   --windows-icon-from-ico=src\ziyuan\logo.ico `
+  --windows-company-name="大佐翻译官" `
+  --windows-product-name="大佐翻译官" `
+  --windows-file-description="大佐翻译官" `
+  --windows-file-version=$version `
+  --windows-product-version=$version `
   --enable-plugin=pyqt5 `
   --include-package-data=qtawesome `
   --include-qt-plugins=platforms,imageformats,styles `
   --include-data-dir=src\ziyuan=src\ziyuan `
   --include-data-dir=src\config=src\config `
+  --include-data-files=third_party\deeplx\windows\amd64\deeplx.exe=engines\deeplx\windows\amd64\deeplx.exe `
+  --include-data-dir=third_party\deeplx=engines\deeplx `
   src\main.py
+
+python tools\write_update_manifest.py dist_nuitka\main.dist
 ```
 
 产物位于：`dist_nuitka/`

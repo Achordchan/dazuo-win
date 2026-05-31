@@ -79,12 +79,6 @@ QComboBox::drop-down {
     width: 20px;
 }
 
-QComboBox::down-arrow {
-    image: url(ziyuan/down-arrow.png);
-    width: 12px;
-    height: 12px;
-}
-
 QComboBox QAbstractItemView {
     background-color: #FFFFFF;
     border: 1px solid #E0E0E0;

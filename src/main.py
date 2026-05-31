@@ -11,11 +11,15 @@ from typing import Optional
 import qasync
 from PyQt5.QtCore import QSharedMemory, QTimer
 from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from src.gongju.autostart import configure_autostart, is_autostart_enabled
 from src.gui.dialog_utils import build_dialog_stylesheet_for_theme
 from src.shezhi import Config
+
+SINGLE_INSTANCE_MEMORY_KEY = "DaZaoFanYiGuanSingleInstance"
+SINGLE_INSTANCE_SERVER_NAME = "DaZaoFanYiGuanSingleInstanceServer"
 
 
 def _get_frozen_base_dir():
@@ -44,8 +48,25 @@ def setup_qt_plugin_paths() -> None:
     try:
         import PyQt5
 
-        qt_platform_path = os.path.join(os.path.dirname(PyQt5.__file__), "Qt5", "plugins", "platforms")
-        qt_plugin_path = os.path.dirname(qt_platform_path)
+        pyqt_dir = os.path.dirname(PyQt5.__file__)
+        plugin_candidates = [
+            os.path.join(pyqt_dir, "qt-plugins"),
+            os.path.join(pyqt_dir, "Qt5", "plugins"),
+            os.path.join(_get_frozen_base_dir(), "PyQt5", "qt-plugins"),
+            os.path.join(_get_frozen_base_dir(), "PyQt5", "Qt5", "plugins"),
+        ]
+        platform_library = "qwindows.dll" if sys.platform == "win32" else "libqcocoa.dylib"
+        qt_plugin_path = ""
+        for candidate in plugin_candidates:
+            platform_path = os.path.join(candidate, "platforms")
+            if os.path.isfile(os.path.join(platform_path, platform_library)):
+                qt_plugin_path = candidate
+                break
+        if not qt_plugin_path:
+            existing = [path for path in plugin_candidates if os.path.isdir(path)]
+            raise RuntimeError(f"未找到可用的 Qt 平台插件目录，候选目录: {existing or plugin_candidates}")
+
+        qt_platform_path = os.path.join(qt_plugin_path, "platforms")
         os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = qt_platform_path
         os.environ["QT_PLUGIN_PATH"] = qt_plugin_path
         logging.info(f"Qt platform plugin path: {qt_platform_path}")
@@ -248,21 +269,38 @@ def repair_autostart_if_needed() -> None:
         logging.error(f"修复开机自启入口失败: {error}")
 
 
+def notify_existing_instance() -> bool:
+    socket = QLocalSocket()
+    socket.connectToServer(SINGLE_INSTANCE_SERVER_NAME)
+    if not socket.waitForConnected(500):
+        return False
+    socket.write(b"show-main")
+    socket.flush()
+    socket.waitForBytesWritten(500)
+    socket.disconnectFromServer()
+    return True
+
+
 def enforce_single_instance() -> Optional[QSharedMemory]:
-    shared_memory = QSharedMemory("DaZaoFanYiGuanSingleInstance")
+    shared_memory = QSharedMemory(SINGLE_INSTANCE_MEMORY_KEY)
     if shared_memory.create(1):
         return shared_memory
 
-    stale_segment = QSharedMemory("DaZaoFanYiGuanSingleInstance")
+    stale_segment = QSharedMemory(SINGLE_INSTANCE_MEMORY_KEY)
     if stale_segment.attach():
         stale_segment.detach()
         if shared_memory.create(1):
             return shared_memory
 
+    woke_existing = notify_existing_instance()
     message_box = QMessageBox()
     message_box.setWindowTitle("程序已在运行")
-    message_box.setText("大佐翻译官已经在运行中。")
-    message_box.setInformativeText("请检查系统托盘或任务栏，或使用任务管理器查看。")
+    if woke_existing:
+        message_box.setText("大佐翻译官已经在运行中，已尝试唤醒主窗口。")
+        message_box.setInformativeText("如果窗口仍未出现，请检查任务栏或系统托盘。")
+    else:
+        message_box.setText("大佐翻译官已经在运行中。")
+        message_box.setInformativeText("请检查系统托盘或任务栏，或使用任务管理器查看。")
     message_box.setIcon(QMessageBox.Warning)
     message_box.setStandardButtons(QMessageBox.Ok)
     try:
@@ -272,6 +310,29 @@ def enforce_single_instance() -> Optional[QSharedMemory]:
     message_box.setStyleSheet(build_dialog_stylesheet_for_theme(theme_key))
     message_box.exec_()
     return None
+
+
+def start_single_instance_server(window: ZhuChuangKou) -> Optional[QLocalServer]:
+    server = QLocalServer(window)
+    if not server.listen(SINGLE_INSTANCE_SERVER_NAME):
+        QLocalServer.removeServer(SINGLE_INSTANCE_SERVER_NAME)
+        if not server.listen(SINGLE_INSTANCE_SERVER_NAME):
+            logging.error(f"启动单实例唤醒通道失败: {server.errorString()}")
+            return None
+
+    def handle_connection():
+        while server.hasPendingConnections():
+            socket = server.nextPendingConnection()
+            if socket is not None:
+                socket.readAll()
+                socket.disconnectFromServer()
+        try:
+            window.show_main_window()
+        except Exception as error:
+            logging.error(f"唤醒主窗口失败: {error}")
+
+    server.newConnection.connect(handle_connection)
+    return server
 
 
 def create_main_window() -> ZhuChuangKou:
@@ -319,6 +380,7 @@ def main():
         window = create_main_window()
         app.window = window
         app.shared_memory = shared_memory
+        app.single_instance_server = start_single_instance_server(window)
         window.show()
 
         with loop:

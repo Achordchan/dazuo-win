@@ -6,9 +6,13 @@
 #define MyAppExeName "大佐翻译官.exe"
 
 [Setup]
-AppId={{YOUR-GUID-HERE}}
+AppId={{5E76B529-0B3B-4E93-AE4D-DCF0EA7174CE}}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppVersion}
+VersionInfoCompany={#MyAppPublisher}
+VersionInfoDescription={#MyAppName}
+VersionInfoProductName={#MyAppName}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}

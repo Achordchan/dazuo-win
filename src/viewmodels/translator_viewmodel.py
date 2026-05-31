@@ -227,6 +227,7 @@ class TranslatorViewModel(QObject):
                 self._last_ai_estimated_tokens = None
 
             self.last_translation_duration_ms_changed.emit(duration_ms)
+            self.error_message_changed.emit(None)
             self.output_text_changed.emit(translated)
             self.detected_source_language_changed.emit(detected)
 
@@ -257,7 +258,12 @@ class TranslatorViewModel(QObject):
         is_ai: bool,
     ):
         async def once():
-            result = await self._fanyi.fanyi(text, source_lang, target_lang)
+            result = await self._fanyi.fanyi(
+                text,
+                source_lang,
+                target_lang,
+                expected_api_name=self._context.api_name if self._context else None,
+            )
             if isinstance(result, tuple):
                 return result
             return result, None

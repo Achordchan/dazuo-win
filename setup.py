@@ -17,6 +17,7 @@ setup(
         "qtawesome>=1.4.2",
         "certifi>=2024.2.2",
         "pywin32>=308; sys_platform == 'win32'",
+        "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
         "PyInstaller==6.3.0",
     ],
     python_requires=">=3.8",

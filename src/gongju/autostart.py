@@ -153,8 +153,8 @@ def _windows_shortcut_matches(shortcut_path: str) -> bool:
     try:
         shortcut = _read_windows_shortcut(shortcut_path)
     except Exception as exc:
-        logger.warning("无法读取开机自启快捷方式，按存在处理: %s", exc)
-        return True
+        logger.warning("无法读取开机自启快捷方式，按未启用处理: %s", exc)
+        return False
 
     command = _get_launch_command()
 

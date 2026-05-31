@@ -86,7 +86,15 @@ class DaZaoFanYi:
             except Exception as error:
                 logger.warning("关闭旧翻译接口失败: %s", sanitize_error_message(error, [getattr(old_jiekou, "api_key", "")]))
 
-    async def fanyi(self, text: str, source_lang: str, target_lang: str) -> TranslationResult:
+    async def fanyi(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str,
+        expected_api_name: Optional[str] = None,
+    ) -> TranslationResult:
         if not self._fanyi_jiekou:
             raise ValueError("未设置翻译接口")
+        if expected_api_name and self._api_name != expected_api_name:
+            raise ValueError("当前翻译服务未连接，请重新选择或重试连接。")
         return await self._fanyi_jiekou.fanyi(text, source_lang, target_lang)

@@ -1,5 +1,6 @@
 import asyncio
 import configparser
+import json
 import logging
 import os
 import sys
@@ -124,6 +125,50 @@ class UpdateCoordinator:
         self.updater.update_error.connect(self.on_update_error)
         self.updater.update_complete.connect(self.on_update_complete)
 
+    def _consume_json_state(self, path: str):
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as file:
+                payload = json.load(file)
+            return payload if isinstance(payload, dict) else {}
+        except Exception as error:
+            logger.warning(f"读取更新状态失败: {path}, {error}")
+            return {}
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    def report_previous_update_state(self):
+        result = self._consume_json_state(self.updater._last_update_result_path())
+        if result and result.get("status") == "failed":
+            log_path = result.get("log_path") or ""
+            message = result.get("message") or "更新替换脚本未返回具体错误。"
+            show_themed_message(
+                self.owner,
+                icon=QMessageBox.Warning,
+                title="上次更新未完成",
+                text=f"上次更新到 v{result.get('expected_version') or '新版本'} 失败。",
+                informative_text=f"{message}\n\n日志：{log_path}" if log_path else message,
+                buttons=QMessageBox.Ok,
+            )
+
+        pending = self._consume_json_state(self.updater._pending_update_path())
+        if pending:
+            expected_version = pending.get("expected_version") or ""
+            if expected_version and expected_version != APP_VERSION:
+                log_path = pending.get("log_path") or ""
+                show_themed_message(
+                    self.owner,
+                    icon=QMessageBox.Warning,
+                    title="上次更新未完成",
+                    text=f"上次更新到 v{expected_version} 没有完成。",
+                    informative_text=f"当前仍在运行 v{APP_VERSION}。\n\n日志：{log_path}" if log_path else f"当前仍在运行 v{APP_VERSION}。",
+                    buttons=QMessageBox.Ok,
+                )
+
     def load_first_run_state(self):
         config = configparser.ConfigParser()
         config_path = self._get_first_run_config_path()
@@ -144,6 +189,7 @@ class UpdateCoordinator:
 
     def show_changelog_if_needed(self):
         try:
+            self.report_previous_update_state()
             config, config_path = self.load_first_run_state()
             config_changed = False
             last_version = config.get("App", "last_version", fallback="")

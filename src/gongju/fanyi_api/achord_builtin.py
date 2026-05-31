@@ -69,7 +69,7 @@ class AchordBuiltinAPI(FanYiJieKou):
                     "User-Agent": f"DaZuoFanYiGuan/{APP_VERSION}",
                 },
                 timeout=self._timeout,
-                trust_env=True,
+                trust_env=False,
             )
         return self.session
 

@@ -136,8 +136,19 @@ class KuaiJieJianJianTing(QObject):
         normalized = self._normalize_hotkey(hotkey)
         if normalized == self._hotkey:
             return
+        old_hotkey = self._hotkey
+        old_use_double_copy = self._use_double_copy
         self._hotkey = normalized
-        self.start()
+        try:
+            self.start()
+        except Exception:
+            self._hotkey = old_hotkey
+            self._use_double_copy = old_use_double_copy
+            try:
+                self.start()
+            except Exception as restore_error:
+                logger.error("恢复旧快捷键失败: %s", restore_error)
+            raise
 
     def _normalize_hotkey(self, hotkey: str) -> str:
         normalized = (hotkey or "").strip().lower().replace(" ", "")
