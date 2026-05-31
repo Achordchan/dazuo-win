@@ -1,6 +1,6 @@
 from ..shezhi import Config
 from .fanyi import FanYiJieKou
-from .fanyi_api import DeepLAPI, GoogleAPI, OpenAICompatibleAPI
+from .fanyi_api import AchordBuiltinAPI, DeepLAPI, GoogleAPI, OpenAICompatibleAPI
 
 
 def build_translation_api(config: Config) -> FanYiJieKou:
@@ -10,6 +10,8 @@ def build_translation_api(config: Config) -> FanYiJieKou:
     if api_name == "deepl":
         api_key = config.get("deepl.api_key", "")
         return DeepLAPI(api_key=api_key)
+    if api_name == "achord_builtin":
+        return AchordBuiltinAPI()
     if api_name == "openai_compat":
         base_url = config.get("openai_compat.base_url")
         model = config.get("openai_compat.model")

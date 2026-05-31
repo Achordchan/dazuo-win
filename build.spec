@@ -35,8 +35,20 @@ print("Resource files to be included:", resource_files)
 print("Config files to be included:", config_files)
 print("Font files to be included:", font_files)
 
+engine_files = []
+engine_dir = os.path.join(current_dir, 'third_party', 'deeplx')
+if os.path.exists(engine_dir):
+    for root, _, files in os.walk(engine_dir):
+        for file in files:
+            source_path = os.path.join(root, file)
+            relative_dir = os.path.relpath(root, engine_dir)
+            dest_path = os.path.join('engines', 'deeplx', relative_dir)
+            engine_files.append((source_path, dest_path))
+
+print("Engine files to be included:", engine_files)
+
 # 合并所有数据文件
-all_data_files = resource_files + config_files + font_files
+all_data_files = resource_files + config_files + font_files + engine_files
 
 a = Analysis(
     ['src/main.py'],

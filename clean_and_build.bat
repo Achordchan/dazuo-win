@@ -16,6 +16,8 @@ if errorlevel 1 exit /b 1
 python -m nuitka ^
     --standalone ^
     --windows-disable-console ^
+    --mingw64 ^
+    --assume-yes-for-downloads ^
     --output-dir=dist_nuitka ^
     --output-filename="大佐翻译官.exe" ^
     --windows-icon-from-ico=src\ziyuan\logo.ico ^
@@ -24,6 +26,8 @@ python -m nuitka ^
     --include-qt-plugins=platforms,imageformats,styles ^
     --include-data-dir=src\ziyuan=src\ziyuan ^
     --include-data-dir=src\config=src\config ^
+    --include-data-files=third_party\deeplx\windows\amd64\deeplx.exe=engines\deeplx\windows\amd64\deeplx.exe ^
+    --include-data-dir=third_party\deeplx=engines\deeplx ^
     src\main.py
 if errorlevel 1 exit /b 1
 

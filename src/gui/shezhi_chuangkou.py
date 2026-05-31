@@ -11,6 +11,7 @@ from . import update_controller as _update_controller
 from ..shezhi import Config
 from ..shezhi.config_defaults import VENDOR_DEFAULTS
 from ..gongju.autostart import configure_autostart, apply_macos_dock_visibility, is_autostart_enabled
+from ..gongju.achord_engine import AchordEngineUpdater, compare_versions
 from ..gongju.fanyi_api.deepl import infer_deepl_plan, verify_deepl_auth
 from ..version import APP_VERSION
 import asyncio
@@ -225,7 +226,7 @@ class SheZhiChuangKou(QDialog):
         service_container.setSpacing(4)
         service_label = QLabel("当前使用:")
         self.translation_api_combo = QComboBox()
-        self.translation_api_combo.addItems(["Google（默认）", "DeepL", "AI（通用接口）"])
+        self.translation_api_combo.addItems(["Google（默认）", "DeepL", "Achord 内置引擎", "AI（通用接口）"])
         service_help = QLabel("在这里选择翻译引擎")
         service_help.setProperty("help", "true")
         service_container.addWidget(service_label)
@@ -318,6 +319,34 @@ class SheZhiChuangKou(QDialog):
         self.deepl_settings_group.setLayout(deepl_layout)
         service_layout.addWidget(self.deepl_settings_group)
 
+        self.achord_engine_updater = AchordEngineUpdater()
+        self.achord_engine_group = QGroupBox("Achord 内置引擎")
+        achord_layout = QVBoxLayout()
+        achord_layout.setSpacing(14)
+        achord_layout.setContentsMargins(20, 20, 20, 20)
+
+        self.achord_engine_status = QLabel("正在读取引擎状态...")
+        self.achord_engine_status.setObjectName("serviceStatusPill")
+        achord_help = QLabel("内置引擎会在本机静默启动，仅应用内部请求；无需登录或填写 Key。")
+        achord_help.setProperty("help", "true")
+        achord_button_row = QHBoxLayout()
+        achord_button_row.setSpacing(10)
+        self.achord_engine_check_button = QPushButton("检测更新")
+        self.achord_engine_check_button.setFixedHeight(32)
+        self.achord_engine_check_button.clicked.connect(self._on_check_achord_engine_clicked)
+        self.achord_engine_update_button = QPushButton("更新引擎")
+        self.achord_engine_update_button.setFixedHeight(32)
+        self.achord_engine_update_button.clicked.connect(self._on_update_achord_engine_clicked)
+        achord_button_row.addWidget(self.achord_engine_check_button)
+        achord_button_row.addWidget(self.achord_engine_update_button)
+        achord_button_row.addStretch()
+
+        achord_layout.addWidget(self.achord_engine_status)
+        achord_layout.addWidget(achord_help)
+        achord_layout.addLayout(achord_button_row)
+        self.achord_engine_group.setLayout(achord_layout)
+        service_layout.addWidget(self.achord_engine_group)
+
         self.translation_note_label = QLabel("注意：Google 翻译无需 API 密钥，但需要确保网络能访问 Google 服务")
         self.translation_note_label.setProperty("help", "true")
         self.translation_note_label.setWordWrap(True)
@@ -375,8 +404,10 @@ class SheZhiChuangKou(QDialog):
             api_index = 0
         elif api_name == "deepl":
             api_index = 1
-        elif api_name == "openai_compat":
+        elif api_name in {"achord_builtin", "deeplx"}:
             api_index = 2
+        elif api_name == "openai_compat":
+            api_index = 3
         else:
             api_index = 0
         self.translation_api_combo.setCurrentIndex(api_index)
@@ -402,6 +433,7 @@ class SheZhiChuangKou(QDialog):
         if hasattr(self, "deepl_api_key_input"):
             self.deepl_api_key_input.setText(self.parent.config.get("deepl.api_key", ""))
             self._update_deepl_badge(self.parent.config.get("deepl.account_type", ""))
+        self._refresh_achord_engine_status()
         self._sync_ai_settings_visibility()
 
     def showEvent(self, event):
@@ -479,7 +511,7 @@ class SheZhiChuangKou(QDialog):
                 self.parent.config.set("show_in_dock", show_in_dock)
                 apply_macos_dock_visibility(show_in_dock)
 
-            api_names = ["google", "deepl", "openai_compat"]
+            api_names = ["google", "deepl", "achord_builtin", "openai_compat"]
             api_index = self.translation_api_combo.currentIndex()
             api_name = api_names[api_index] if 0 <= api_index < len(api_names) else "google"
             self.parent.config.set("translation.api", api_name)
@@ -518,6 +550,102 @@ class SheZhiChuangKou(QDialog):
         dialog = GengXinRiZhi(self)
         dialog.setModal(True)
         dialog.exec_()
+
+    def _refresh_achord_engine_status(self, extra: str = ""):
+        if not hasattr(self, "achord_engine_status"):
+            return
+        info = self.achord_engine_updater.current_engine_info()
+        if info:
+            source_map = {
+                "cache": "已更新",
+                "bundled": "随包内置",
+                "development": "开发目录",
+            }
+            text = f"当前引擎：v{info.version}（{source_map.get(info.source, info.source)}）"
+        else:
+            text = "当前引擎：缺失"
+        if extra:
+            text = f"{text} · {extra}"
+        self.achord_engine_status.setText(text)
+
+    def _on_check_achord_engine_clicked(self):
+        self.achord_engine_check_button.setEnabled(False)
+        self.achord_engine_check_button.setText("检测中...")
+        self._refresh_achord_engine_status("检测中")
+
+        async def check():
+            try:
+                latest = await self.achord_engine_updater.check_latest()
+                current = self.achord_engine_updater.current_engine_info()
+                current_version = current.version if current else "0.0.0"
+                if compare_versions(latest.version, current_version) > 0:
+                    self._refresh_achord_engine_status(f"发现 v{latest.version}")
+                    show_themed_message(
+                        self,
+                        icon=QMessageBox.Information,
+                        title="发现引擎更新",
+                        text=f"检测到 Achord 内置引擎 v{latest.version}，可点击“更新引擎”安装。",
+                        buttons=QMessageBox.Ok,
+                    )
+                else:
+                    self._refresh_achord_engine_status("已是最新")
+                    show_themed_message(
+                        self,
+                        icon=QMessageBox.Information,
+                        title="引擎已是最新",
+                        text=f"当前 Achord 内置引擎已是最新版本 v{current_version}。",
+                        buttons=QMessageBox.Ok,
+                    )
+            except Exception as e:
+                self._refresh_achord_engine_status("检测失败")
+                show_themed_message(
+                    self,
+                    icon=QMessageBox.Warning,
+                    title="检测引擎更新失败",
+                    text=str(e),
+                    buttons=QMessageBox.Ok,
+                )
+            finally:
+                self.achord_engine_check_button.setEnabled(True)
+                self.achord_engine_check_button.setText("检测更新")
+
+        asyncio.get_event_loop().create_task(check())
+
+    def _on_update_achord_engine_clicked(self):
+        self.achord_engine_update_button.setEnabled(False)
+        self.achord_engine_update_button.setText("更新中...")
+        self._refresh_achord_engine_status("下载中")
+
+        def progress(value: int):
+            self._refresh_achord_engine_status(f"下载 {value}%")
+
+        async def update():
+            try:
+                info = await self.achord_engine_updater.download_latest(progress_callback=progress)
+                self._refresh_achord_engine_status("更新完成")
+                if self.parent.config.get("translation.api", "google") == "achord_builtin":
+                    self.parent.reload_translation_api()
+                show_themed_message(
+                    self,
+                    icon=QMessageBox.Information,
+                    title="引擎更新完成",
+                    text=f"Achord 内置引擎已更新到 v{info.version}。",
+                    buttons=QMessageBox.Ok,
+                )
+            except Exception as e:
+                self._refresh_achord_engine_status("更新失败")
+                show_themed_message(
+                    self,
+                    icon=QMessageBox.Warning,
+                    title="引擎更新失败",
+                    text=str(e),
+                    buttons=QMessageBox.Ok,
+                )
+            finally:
+                self.achord_engine_update_button.setEnabled(True)
+                self.achord_engine_update_button.setText("更新引擎")
+
+        asyncio.get_event_loop().create_task(update())
 
     def _update_deepl_badge(self, account_type: str, detail: str = ""):
         account_type = (account_type or "").strip().lower()
@@ -666,14 +794,19 @@ class SheZhiChuangKou(QDialog):
     def _sync_ai_settings_visibility(self):
         index = self.translation_api_combo.currentIndex()
         is_deepl = index == 1
-        is_ai = index == 2
+        is_achord_engine = index == 2
+        is_ai = index == 3
         if hasattr(self, "deepl_settings_group"):
             self.deepl_settings_group.setVisible(is_deepl)
+        if hasattr(self, "achord_engine_group"):
+            self.achord_engine_group.setVisible(is_achord_engine)
         self.ai_settings_group.setVisible(is_ai)
 
         if index == 0:
             self.translation_note_label.setText("Google 翻译无需 API 密钥，但需要确保网络可以访问 Google 服务。")
         elif index == 1:
             self.translation_note_label.setText("DeepL 需要 API Key；程序会自动识别 Free / Pro 并显示身份标识。")
+        elif index == 2:
+            self.translation_note_label.setText("Achord 内置引擎会在本机静默启动，无需登录；引擎可单独检测并更新。")
         else:
             self.translation_note_label.setText("AI 模式需要填写模型厂家、接口地址、模型名和 API Key。")

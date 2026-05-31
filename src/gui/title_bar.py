@@ -16,7 +16,7 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self._parent = parent
         self.setWindowTitle("关于")
-        self.setFixedSize(560, 500)
+        self.setFixedSize(560, 530)
         self.setObjectName("aboutDialog")
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
@@ -60,6 +60,12 @@ class AboutDialog(QDialog):
         )
         info_layout.addWidget(self._build_info_row("version", f"版本：v{APP_VERSION}"))
         info_layout.addWidget(self._build_info_row("license", "许可：MIT License"))
+        info_layout.addWidget(
+            self._build_info_row(
+                "license",
+                "内置引擎：Powered by DeepLX / OwO Network MIT License",
+            )
+        )
         card_layout.addLayout(info_layout)
 
         actions_layout = QHBoxLayout()

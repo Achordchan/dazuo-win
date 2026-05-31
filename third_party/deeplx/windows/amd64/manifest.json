@@ -1,0 +1,12 @@
+{
+  "name": "DeepLX",
+  "version": "1.2.2",
+  "asset_name": "deeplx_windows_amd64.exe",
+  "sha256": "b695142816f4ddb41c727e6ff8bc67a6e51437636ce442656cf2a1da9b2fe1a6",
+  "download_url": "https://github.com/OwO-Network/DeepLX/releases/download/v1.2.2/deeplx_windows_amd64.exe",
+  "release_url": "https://github.com/OwO-Network/DeepLX/releases/tag/v1.2.2",
+  "published_at": "2026-05-22T05:19:59Z",
+  "installed_at": "bundled",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2022 OwO Network Limited"
+}

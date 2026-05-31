@@ -5,6 +5,7 @@ from typing import Optional
 import aiohttp
 
 from ..fanyi import FanYiJieKou
+from ...version import APP_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ async def verify_deepl_auth(api_key: str) -> dict:
     headers = {
         "Authorization": f"DeepL-Auth-Key {api_key}",
         "Accept": "application/json",
-        "User-Agent": "DaZuoFanYiGuan/1.2.3",
+        "User-Agent": f"DaZuoFanYiGuan/{APP_VERSION}",
     }
     async with aiohttp.ClientSession(headers=headers, timeout=timeout, trust_env=True) as session:
         async with session.get(f"{base_url}/v2/usage") as response:
@@ -102,7 +103,7 @@ class DeepLAPI(FanYiJieKou):
                 headers={
                     "Authorization": f"DeepL-Auth-Key {self.api_key}",
                     "Content-Type": "application/json",
-                    "User-Agent": "DaZuoFanYiGuan/1.2.3",
+                    "User-Agent": f"DaZuoFanYiGuan/{APP_VERSION}",
                 },
                 timeout=self._timeout,
                 trust_env=True,

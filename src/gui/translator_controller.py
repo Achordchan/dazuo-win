@@ -14,6 +14,8 @@ def update_service_display(self):
         self.service_display.setText(f"{vendor}")
     elif api_name == "deepl":
         self.service_display.setText("DeepL")
+    elif api_name == "achord_builtin":
+        self.service_display.setText("Achord 内置引擎")
     else:
         self.service_display.setText("Google")
 
