@@ -56,6 +56,7 @@ from .mini_chuangkou import MiniChuangKou
 from .searchable_combo import SearchableComboBox
 from .common_widgets import FuDongAnNiu, ShuRuKuang
 from .dialog_utils import apply_dialog_theme
+from .font_settings import apply_text_edit_font_size, clamp_text_font_size
 from .icon_provider import themed_icon, resource_dir
 from .output_widgets import ShuChuKuang, AITranslatingStatusBar, InfoTooltipPopup
 from .title_bar import BiaoTiLan
@@ -455,7 +456,7 @@ class ZhuChuangKou(QMainWindow):
         service_layout = QHBoxLayout(service_container)
         service_layout.setContentsMargins(10, 4, 10, 4)
         service_layout.setSpacing(6)
-        service_label = QLabel("当前翻译服务提供")
+        service_label = QLabel("翻译服务")
         service_label.setObjectName("serviceStatusLabel")
         service_layout.addWidget(service_label)
         service_sparkle = QLabel("✦")
@@ -513,6 +514,7 @@ class ZhuChuangKou(QMainWindow):
     def _load_default_settings(self):
         """加载默认设置"""
         self._update_service_display()
+        self._apply_text_font_sizes()
         
         source_lang = self.config.get("translation.source_lang", "自动检测")
         source_index = self.source_lang_combo.findText(source_lang)
@@ -773,6 +775,18 @@ class ZhuChuangKou(QMainWindow):
     def _apply_theme(self, theme_name):
         """应用主题"""
         _theme_controller.apply_theme(self, theme_name)
+        self._apply_text_font_sizes()
+
+    def _apply_text_font_sizes(self):
+        source_size = clamp_text_font_size(self.config.get("display.source_font_size", 16))
+        target_size = clamp_text_font_size(self.config.get("display.target_font_size", 16))
+        if hasattr(self, "input_text"):
+            apply_text_edit_font_size(self.input_text, source_size)
+        if hasattr(self, "output_text"):
+            apply_text_edit_font_size(self.output_text, target_size)
+
+    def apply_display_settings(self):
+        self._apply_text_font_sizes()
 
     def _update_button_icons(self, theme_name):
         """更新按钮图标以适应主题"""
@@ -1012,8 +1026,12 @@ class ZhuChuangKou(QMainWindow):
         """处理Mini窗口的文本变化"""
         if not self.mini_window:
             return
-        
-        text = self.mini_window.input_text.toPlainText().strip()
+
+        input_widget = getattr(self.mini_window, "input_text", None)
+        if input_widget is None or not hasattr(input_widget, "toPlainText"):
+            return
+
+        text = input_widget.toPlainText().strip()
         if not text:
             self.mini_window.output_text.clear()
             return
@@ -1040,7 +1058,7 @@ class ZhuChuangKou(QMainWindow):
             
             # 显示翻译结果
             self.mini_window.stop_loading()
-            self.mini_window.output_text.setPlainText(result_text)
+            self.mini_window.set_output_text(result_text)
             
             # 调整窗口大小
             self.mini_window._adjust_window_size()
@@ -1050,7 +1068,7 @@ class ZhuChuangKou(QMainWindow):
         except Exception as e:
             logger.error(f"Mini窗口翻译失败: {e}")
             self.mini_window.stop_loading()
-            self.mini_window.output_text.setPlainText("翻译失败，请重试")
+            self.mini_window.set_output_text("翻译失败，请重试")
     
     def _toggle_mini_mode(self, checked, show_hint=True):
         self.set_mini_mode(checked, show_hint=show_hint)

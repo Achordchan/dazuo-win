@@ -1,6 +1,6 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout, QApplication, QSizePolicy, QLabel
-from PyQt5.QtCore import Qt, QPoint, QSize, pyqtSignal, QTimer, QRectF, QEvent
-from PyQt5.QtGui import QIcon, QPainter, QColor, QCursor, QPen, QPainterPath, QTextCursor
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QHBoxLayout, QApplication, QLabel, QFrame
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QEvent
+from PyQt5.QtGui import QCursor, QFont
 import logging
 from ..shezhi import Config
 import asyncio
@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 class MiniChuangKou(QWidget):
     # 添加文本变化信号
     text_changed = pyqtSignal()
+    DEFAULT_WIDTH = 320
+    DEFAULT_HEIGHT = 96
+    MIN_HEIGHT = 88
+    OUTER_RADIUS = 12
+    OUTPUT_FONT_SIZE = 15
     
     # 定义主题映射
     THEME_MAP = {
@@ -107,95 +112,63 @@ class MiniChuangKou(QWidget):
         self._apply_theme()
         
         # 设置窗口初始大小 - 但不使用固定大小，允许后续自适应
-        size = self.config.get("mini_window_size", {"width": 300, "height": 150})
+        size = self.config.get("mini_window_size", {"width": self.DEFAULT_WIDTH, "height": 150})
         self.resize(size["width"], size["height"])
         
-        # 设置窗口透明度为85%
-        self.setWindowOpacity(0.85)
+        # 避免过低透明度让文字一起发虚。
+        self.setWindowOpacity(float(self.config.get("mini_window_opacity", 0.95)))
     
     def _init_ui(self):
         """初始化UI"""
         try:
-            # 获取当前主题
-            theme = self._get_theme_colors()
-            
-            # 使用简单明了的布局
-            main_layout = QVBoxLayout(self)
-            main_layout.setContentsMargins(1, 1, 1, 1)  # 最小边距
-            main_layout.setSpacing(1)  # 最小间距
-            
-            # 创建顶部工具栏 - 优化高度和布局
+            root_layout = QVBoxLayout(self)
+            root_layout.setContentsMargins(0, 0, 0, 0)
+            root_layout.setSpacing(0)
+
+            self.surface = QFrame(self)
+            self.surface.setObjectName("miniSurface")
+            self.surface.setAttribute(Qt.WA_StyledBackground, True)
+            root_layout.addWidget(self.surface)
+
+            main_layout = QVBoxLayout(self.surface)
+            main_layout.setContentsMargins(10, 8, 10, 10)
+            main_layout.setSpacing(6)
+
             title_bar = QWidget()
-            title_bar.setFixedHeight(18)  # 略微调整高度
+            title_bar.setObjectName("miniToolbar")
+            title_bar.setFixedHeight(28)
             title_layout = QHBoxLayout(title_bar)
-            title_layout.setContentsMargins(3, 0, 3, 0)  # 减少垂直内边距
-            title_layout.setSpacing(2)  # 减少元素间距
-            
-            # 添加简单标签 - 调整样式
-            self.title_label = QLabel("大佐翻译官")
-            self.title_label.setStyleSheet(f"""
-                color: {theme.get('text_color', '#ad921f')}; 
-                font-size: 9px;  /* 减小字体 */
-                font-weight: bold;
-            """)
-            title_layout.addWidget(self.title_label)
-            
-            # 添加弹性空间
+            title_layout.setContentsMargins(0, 0, 0, 0)
+            title_layout.setSpacing(0)
+
+            self.title_label = QLabel("")
+            self.title_label.setObjectName("miniTitleLabel")
+            self.title_label.hide()
+
             title_layout.addStretch()
-            
-            # 添加恢复按钮 - 调整为更简洁的样式
-            self.restore_btn = QPushButton("▢")  # 使用更小的方框符号
+
+            self.restore_btn = QPushButton("↗")
+            self.restore_btn.setObjectName("miniRestoreButton")
             self.restore_btn.setToolTip("切换到主窗口")
-            self.restore_btn.setFixedSize(18, 18)  # 减小按钮尺寸
-            self.restore_btn.setStyleSheet(f"""
-                QPushButton {{
-                    color: {theme.get('text_color', '#FFFFFF')};
-                    background-color: transparent;  /* 透明背景 */
-                    border: none;  /* 移除边框 */
-                    font-size: 9px;  /* 减小字体 */
-                    font-weight: bold;
-                    padding: 0px;
-                    margin: 0px;
-                }}
-                QPushButton:hover {{
-                    color: {theme.get('focus_border_color', '#0A84FF')};  /* 悬停时变色 */
-                }}
-            """)
+            self.restore_btn.setCursor(Qt.PointingHandCursor)
+            self.restore_btn.setFixedSize(30, 24)
             self.restore_btn.clicked.connect(self._switch_to_main)
             title_layout.addWidget(self.restore_btn)
-            
-            # 添加标题栏到主布局
+
             main_layout.addWidget(title_bar)
-            
-            # 创建简单的文本显示区域 - 使用QLabel替代QTextEdit以确保简单显示
+
             self.output_text = QLabel("翻译结果将显示在这里...")
+            self.output_text.setObjectName("miniOutputText")
             self.output_text.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self.output_text.setWordWrap(True)
             self.output_text.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
-            self.output_text.setStyleSheet(f"""
-                QLabel {{
-                    color: {theme.get('text_color', '#FFFFFF')};
-                    background-color: {theme.get('text_background', '#2D2D2D')};
-                    padding: 5px;
-                    font-size: 12px;
-                    border: 1px solid {theme.get('border_color', '#404040')};
-                    border-radius: 2px;
-                }}
-            """)
-            self.output_text.setMinimumHeight(30)
-            
-            # 添加文本区域到主布局
+            self._apply_output_font()
+            self.output_text.setMinimumHeight(44)
             main_layout.addWidget(self.output_text)
-            
-            # 设置窗口整体样式
-            self.setStyleSheet(f"""
-                MiniChuangKou {{
-                    background-color: {theme.get('background_color', '#2D2D2D')};
-                    border: 1px solid {theme.get('border_color', '#404040')};
-                    border-radius: 3px;
-                }}
-            """)
-            
+
+            self.setStyleSheet("MiniChuangKou { background: transparent; border: none; }")
+            self._apply_theme()
+
             logger.info("成功初始化Mini窗口UI")
         except Exception as e:
             logger.error(f"初始化Mini窗口UI失败: {e}")
@@ -224,7 +197,7 @@ class MiniChuangKou(QWidget):
             
             # 该按钮当前使用文本显示，不依赖 maximize-*.svg，避免无意义的缺失告警
             if hasattr(self, "restore_btn") and self.restore_btn:
-                self.restore_btn.setText("-")
+                self.restore_btn.setText("↗")
             
             logger.info(f"Mini窗口更新主题: {theme_name}, 显示名称: {display_name}, 背景色: {background_color}, 图标后缀: {icon_suffix}")
             
@@ -239,29 +212,65 @@ class MiniChuangKou(QWidget):
         # 确保主题是最新的
         self._update_current_theme()
         theme = self.current_theme
+
+        self._apply_output_font()
+        if hasattr(self, "restore_btn"):
+            self.restore_btn.setStyleSheet(f"""
+                QPushButton#miniRestoreButton {{
+                    color: {theme["text_color"]};
+                    background-color: transparent;
+                    border: 1px solid transparent;
+                    border-radius: 8px;
+                    padding: 0;
+                    font-size: 16px;
+                    font-weight: 700;
+                }}
+                QPushButton#miniRestoreButton:hover {{
+                    color: {theme["focus_border_color"]};
+                    background-color: {theme["button_hover"]};
+                    border-color: {theme["button_hover_border"]};
+                }}
+                QPushButton#miniRestoreButton:pressed {{
+                    background-color: {theme["button_pressed"]};
+                }}
+            """)
             
         # output_text 当前是 QLabel
         text_style = f"""
-            QLabel {{
-                background-color: {theme["background_color"]};
+            QLabel#miniOutputText {{
+                background-color: transparent;
                 color: {theme["text_color"]};
-                border: 1px solid {theme["border_color"]};
-                border-radius: 3px;
-                padding: 5px;
-                font-size: 12px;
-                font-family: "SimHei";
+                border: none;
+                padding: 2px 4px 4px 4px;
+                font-size: {self.OUTPUT_FONT_SIZE}px;
+                font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+                line-height: 1.45;
             }}
         """
         self.output_text.setStyleSheet(text_style)
         
-        # 设置窗口样式
-        self.setStyleSheet(f"""
-            MiniChuangKou {{
-                background-color: {theme["background_color"]};
-                border: 1px solid {theme["border_color"]};
-                border-radius: 4px;
-            }}
-        """)
+        if hasattr(self, "surface"):
+            self.surface.setStyleSheet(f"""
+                QFrame#miniSurface {{
+                    background-color: {theme["background_color"]};
+                    border: 1px solid {theme["border_color"]};
+                    border-radius: {self.OUTER_RADIUS}px;
+                }}
+            """)
+
+        self.setStyleSheet("MiniChuangKou { background: transparent; border: none; }")
+
+    def _apply_output_font(self):
+        if not hasattr(self, "output_text"):
+            return
+        font = self.output_text.font()
+        font.setFamily("Microsoft YaHei UI")
+        font.setPixelSize(self.OUTPUT_FONT_SIZE)
+        font.setWeight(QFont.Normal)
+        font.setStyleStrategy(QFont.PreferAntialias)
+        if hasattr(font, "setHintingPreference"):
+            font.setHintingPreference(QFont.PreferNoHinting)
+        self.output_text.setFont(font)
 
     def update_opacity(self, opacity: float):
         try:
@@ -276,7 +285,7 @@ class MiniChuangKou(QWidget):
             self.output_text.clear()  # 清空任何现有内容
             
             # 使用setText而不是setPlainText
-            self.output_text.setText("正在翻译...")
+            self.set_output_text("正在翻译...")
             
             # 显示加载状态
             self._loading = True
@@ -304,7 +313,7 @@ class MiniChuangKou(QWidget):
             
             if line_count <= 1:
                 # 单行文本使用简单固定尺寸
-                self.resize(300, 60)  # 固定宽高，确保可见
+                self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
                 return
 
             if not hasattr(self.output_text, "document"):
@@ -359,13 +368,24 @@ class MiniChuangKou(QWidget):
         if hasattr(self.output_text, "toPlainText"):
             return self.output_text.toPlainText()
         return self.output_text.text()
+
+    def set_output_text(self, text: str):
+        if hasattr(self.output_text, "setPlainText"):
+            self.output_text.setPlainText(text)
+        else:
+            self.output_text.setText(text)
     
     def _switch_to_main(self):
         """切换到主窗口"""
-        if self._parent:
-            self._parent.show()
-            self._parent.activateWindow()
+        if not self._parent:
             self.hide()
+            return
+        if hasattr(self._parent, "show_main_window"):
+            self._parent.show_main_window()
+            return
+        self._parent.show()
+        self._parent.activateWindow()
+        self.hide()
     
     def mousePressEvent(self, event):
         """处理鼠标按下事件"""
@@ -398,37 +418,8 @@ class MiniChuangKou(QWidget):
             event.accept()
     
     def paintEvent(self, event):
-        """绘制窗口背景"""
-        try:
-            painter = QPainter(self)
-            painter.setRenderHint(QPainter.Antialiasing)
-            
-            # 创建圆角矩形路径
-            path = QPainterPath()
-            rect = QRectF(self.rect())
-            path.addRoundedRect(rect, 24, 24)
-            
-            # 使用当前主题的颜色
-            if self.current_theme:
-                background_color = QColor(self.current_theme["background_color"])
-                border_color = QColor(self.current_theme["border_color"])
-            else:
-                background_color = QColor(45, 45, 45)
-                border_color = QColor(64, 64, 64)
-            
-            # 设置背景颜色
-            painter.fillPath(path, background_color)
-            
-            # 绘制边框
-            pen = QPen(border_color)
-            pen.setWidth(1)
-            painter.setPen(pen)
-            painter.drawPath(path)
-            
-            painter.end()
-            
-        except Exception as e:
-            logger.error(f"绘制窗口背景失败: {e}")
+        """窗口背景由 miniSurface 绘制，避免覆盖子控件。"""
+        super().paintEvent(event)
     
     def resizeEvent(self, event):
         """处理窗口大小改变事件"""
@@ -446,8 +437,8 @@ class MiniChuangKou(QWidget):
             # 获取鼠标当前位置
             cursor_pos = QCursor.pos()
             
-            # 使用固定尺寸
-            self.resize(300, 60)
+            # 使用不会压扁工具条和译文区域的默认尺寸
+            self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
             
             # 始终重置内容
             self.output_text.clear()
@@ -742,14 +733,14 @@ class MiniChuangKou(QWidget):
             logger.info(f"更新翻译结果: {text[:20]}...")
         except Exception as e:
             logger.error(f"更新翻译结果失败: {e}")
-            self.output_text.setText(f"翻译错误: {str(e)}")
+            self.set_output_text(f"翻译错误: {str(e)}")
 
     def _adjust_window_size_for_text(self, text):
         """根据文本内容自动调整窗口大小"""
         try:
             if not text:
                 # 空文本使用默认尺寸
-                self.resize(300, 60)
+                self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
                 return
             
             # 计算所需高度
@@ -779,21 +770,20 @@ class MiniChuangKou(QWidget):
             line_count = len(text_lines)
             line_height = font_metrics.lineSpacing()
             
-            # 考虑标题栏高度增加后的额外空间需求
-            title_bar_height = 20  # 与上面设置的标题栏高度保持一致
-            content_height = line_count * line_height + 20 + title_bar_height  # 添加一些额外空间
+            toolbar_height = 28
+            content_height = line_count * line_height + 28 + toolbar_height
             
             # 限制最大高度，避免窗口过大
             max_height = 400
             content_height = min(content_height, max_height)
             
             # 调整窗口大小
-            self.resize(300, max(60, content_height))
-            logger.info(f"调整窗口大小为: 300x{content_height}, 文本行数: {line_count}")
+            self.resize(self.DEFAULT_WIDTH, max(self.MIN_HEIGHT, content_height))
+            logger.info(f"调整窗口大小为: {self.DEFAULT_WIDTH}x{content_height}, 文本行数: {line_count}")
         except Exception as e:
             logger.error(f"调整窗口大小失败: {e}")
             # 出错时使用默认大小
-            self.resize(300, 60)
+            self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
 
     def _get_theme_colors(self):
         """获取当前主题颜色"""

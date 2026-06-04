@@ -49,6 +49,10 @@ DEFAULT_CONFIG = {
     "shortcuts": {
         "copy_translate": get_default_hotkey(),
     },
+    "display": {
+        "source_font_size": 18,
+        "target_font_size": 18,
+    },
     "auto_start": False,
     "show_in_dock": True,
     "mac_accessibility_prompted": False,

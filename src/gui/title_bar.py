@@ -17,7 +17,7 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self._parent = parent
         self.setWindowTitle("关于")
-        self.setFixedSize(620, 650)
+        self.setFixedSize(620, 680)
         self.setObjectName("aboutDialog")
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
@@ -122,6 +122,7 @@ class AboutDialog(QDialog):
 
         layout.addWidget(card)
         self._apply_style()
+        self._disable_context_menus()
         self._load_avatar(resource_path("头像.jpg"))
 
     def _build_section(self, title: str, rows: list[tuple[str, str, str]]):
@@ -186,6 +187,11 @@ class AboutDialog(QDialog):
             return self._parent.config.get("theme", "dark")
         return "dark"
 
+    def _disable_context_menus(self):
+        self.setContextMenuPolicy(Qt.NoContextMenu)
+        for child in self.findChildren(QWidget):
+            child.setContextMenuPolicy(Qt.NoContextMenu)
+
     def _apply_style(self):
         theme_name = self._theme_name()
         palette = get_dialog_palette(self._parent)
@@ -197,19 +203,19 @@ class AboutDialog(QDialog):
             f"#aboutDialog {{ background: {palette.background}; }}"
             f"#aboutCard {{ background: {palette.surface}; border: 1px solid {palette.border}; border-radius: 16px; }}"
             f"#aboutAvatar {{ background: {soft_primary}; border-radius: 38px; border: 1px solid {soft_border}; }}"
-            f"#aboutTitle {{ color: {palette.text}; font-size: 22px; font-weight: 700; padding: 0; }}"
-            f"#aboutVersionBadge {{ background: {soft_primary}; color: {palette.primary}; border: 1px solid {soft_border}; border-radius: 10px; padding: 2px 9px; font-size: 12px; font-weight: 700; }}"
-            f"#aboutSubtitle {{ color: {palette.text}; font-size: 13px; font-weight: 600; padding: 0; }}"
-            f"#aboutSummary {{ color: {palette.text_secondary}; font-size: 12px; padding: 0; }}"
+            f"#aboutTitle {{ color: {palette.text}; font-size: 24px; font-weight: 700; padding: 0; }}"
+            f"#aboutVersionBadge {{ background: {soft_primary}; color: {palette.primary}; border: 1px solid {soft_border}; border-radius: 10px; padding: 2px 9px; font-size: 14px; font-weight: 700; }}"
+            f"#aboutSubtitle {{ color: {palette.text}; font-size: 15px; font-weight: 600; padding: 0; }}"
+            f"#aboutSummary {{ color: {palette.text_secondary}; font-size: 14px; padding: 0; }}"
             f"#aboutDivider {{ color: {palette.border}; background: {palette.border}; max-height: 1px; border: none; }}"
             f"#aboutSection {{ background: {muted_surface}; border: 1px solid {palette.border}; border-radius: 12px; }}"
-            f"#aboutSectionTitle {{ color: {palette.text_secondary}; font-size: 12px; font-weight: 700; padding: 0; }}"
-            f"#aboutInfoLabel {{ color: {palette.text_secondary}; font-size: 12px; padding: 0; }}"
-            f"#aboutInfoValue {{ color: {palette.text}; font-size: 13px; padding: 0; }}"
+            f"#aboutSectionTitle {{ color: {palette.text_secondary}; font-size: 14px; font-weight: 700; padding: 0; }}"
+            f"#aboutInfoLabel {{ color: {palette.text_secondary}; font-size: 14px; padding: 0; }}"
+            f"#aboutInfoValue {{ color: {palette.text}; font-size: 15px; padding: 0; }}"
             f"#aboutInfoValue a {{ color: {palette.primary}; text-decoration: none; }}"
-            f"#aboutLinkButton {{ background: transparent; color: {palette.primary}; border: 1px solid {soft_border}; border-radius: 9px; min-height: 32px; padding: 0 12px; text-align: left; font-weight: 600; }}"
+            f"#aboutLinkButton {{ background: transparent; color: {palette.primary}; border: 1px solid {soft_border}; border-radius: 9px; min-height: 32px; padding: 0 12px; text-align: left; font-size: 14px; font-weight: 600; }}"
             f"#aboutLinkButton:hover {{ background: {link_hover}; }}"
-            f"#aboutCloseButton {{ background: {palette.primary}; color: #FFFFFF; border: 1px solid {palette.primary}; border-radius: 9px; min-width: 76px; min-height: 32px; padding: 0 16px; font-weight: 600; }}"
+            f"#aboutCloseButton {{ background: {palette.primary}; color: #FFFFFF; border: 1px solid {palette.primary}; border-radius: 9px; min-width: 76px; min-height: 32px; padding: 0 16px; font-size: 14px; font-weight: 600; }}"
             f"#aboutCloseButton:hover {{ background: {palette.primary_hover}; border-color: {palette.primary_hover}; }}"
         )
 
@@ -349,7 +355,7 @@ class BiaoTiLan(QWidget):
 
     def apply_theme(self, theme_name: str):
         palette = get_dialog_palette(self.parent)
-        self.title_label.setStyleSheet(f"color: {palette.text}; font-size: 14px; font-weight: 500;")
+        self.title_label.setStyleSheet(f"color: {palette.text}; font-size: 16px; font-weight: 500;")
         self.about_btn.setStyleSheet(build_link_button_stylesheet(self.parent))
 
         for btn in (self.settings_btn, self.mini_mode_btn, self.theme_btn, self.min_btn, self.max_btn):

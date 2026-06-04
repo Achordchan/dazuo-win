@@ -137,7 +137,7 @@ class WindowModeController:
     async def translate_and_show_mini(self, text_to_translate, service=None, api_name=None, api_generation=None):
         try:
             mini_window = self.ensure_mini_window()
-            mini_window.resize(300, 60)
+            mini_window.resize(mini_window.DEFAULT_WIDTH, mini_window.DEFAULT_HEIGHT)
             mini_window.output_text.clear()
             mini_window.show_at_cursor()
             mini_window.start_loading()
@@ -158,18 +158,18 @@ class WindowModeController:
             translation_text = translation_result[0] if isinstance(translation_result, tuple) else translation_result
             if not translation_text:
                 mini_window.stop_loading()
-                mini_window.output_text.setText("翻译失败，请重试")
+                mini_window.set_output_text("翻译失败，请重试")
                 return
 
             mini_window.stop_loading()
-            mini_window.output_text.setText(translation_text)
+            mini_window.set_output_text(translation_text)
             mini_window._adjust_window_size_for_text(translation_text)
             logger.info(f"Mini窗口已显示翻译结果: '{text_to_translate[:20]}...' -> '{translation_text[:20]}...'")
         except Exception as error:
             logger.error(f"Mini窗口翻译失败: {error}")
             if getattr(self.main_window, "mini_window", None):
                 self.main_window.mini_window.stop_loading()
-                self.main_window.mini_window.output_text.setText(f"翻译失败: {error}")
+                self.main_window.mini_window.set_output_text(f"翻译失败: {error}")
 
     def show_mini_mode_hint(self):
         try:

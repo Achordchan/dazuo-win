@@ -5,11 +5,12 @@ import sys
 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                            QLineEdit, QPushButton, QComboBox, QWidget, QGroupBox,
-                           QTabWidget, QMessageBox, QScrollArea, QCheckBox)
+                           QTabWidget, QMessageBox, QScrollArea, QCheckBox, QSlider, QFrame)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import QApplication
-from .dialog_utils import build_menu_stylesheet, install_chinese_context_menu, show_themed_message
+from .dialog_utils import build_menu_stylesheet, get_dialog_palette, install_chinese_context_menu, show_themed_message, to_rgba
+from .font_settings import DEFAULT_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE, MIN_TEXT_FONT_SIZE, clamp_text_font_size
 from .themes import ThemeManager
 from .gengxinrizhi import GengXinRiZhi
 from . import update_controller as _update_controller
@@ -171,6 +172,42 @@ class SheZhiChuangKou(QDialog):
         shortcut_layout.addWidget(shortcut_help)
         shortcut_group.setLayout(shortcut_layout)
 
+        display_group = QGroupBox("显示")
+        display_layout = QVBoxLayout()
+        display_layout.setSpacing(10)
+
+        source_font_row = self._build_font_size_row("原文字号", "source")
+        target_font_row = self._build_font_size_row("译文字号", "target")
+
+        self.font_preview_card = QFrame()
+        self.font_preview_card.setObjectName("fontPreviewCard")
+        preview_layout = QVBoxLayout(self.font_preview_card)
+        preview_layout.setContentsMargins(14, 12, 14, 12)
+        preview_layout.setSpacing(8)
+        preview_title = QLabel("字号示例")
+        preview_title.setObjectName("fontPreviewTitle")
+        self.source_font_preview = QLabel("原文示例：Hello，欢迎使用大佐翻译官")
+        self.source_font_preview.setObjectName("sourceFontPreview")
+        self.source_font_preview.setWordWrap(True)
+        self.target_font_preview = QLabel("译文示例：你好，欢迎使用大佐翻译官")
+        self.target_font_preview.setObjectName("targetFontPreview")
+        self.target_font_preview.setWordWrap(True)
+        preview_layout.addWidget(preview_title)
+        preview_layout.addWidget(self.source_font_preview)
+        preview_layout.addWidget(self.target_font_preview)
+
+        display_help = QLabel("调整主窗口原文输入区和译文显示区的阅读字号。")
+        display_help.setProperty("help", "true")
+        display_help.setWordWrap(True)
+
+        display_layout.addLayout(source_font_row)
+        display_layout.addLayout(target_font_row)
+        display_layout.addWidget(self.font_preview_card)
+        display_layout.addWidget(display_help)
+        display_group.setLayout(display_layout)
+        self._apply_display_preview_style()
+        self._sync_font_size_preview()
+
         startup_group = QGroupBox("启动")
         startup_layout = QVBoxLayout()
         startup_layout.setSpacing(8)
@@ -210,6 +247,7 @@ class SheZhiChuangKou(QDialog):
         update_group.setLayout(update_layout)
 
         base_layout.addWidget(shortcut_group)
+        base_layout.addWidget(display_group)
         base_layout.addWidget(startup_group)
         base_layout.addWidget(update_group)
         base_layout.addStretch()
@@ -398,6 +436,81 @@ class SheZhiChuangKou(QDialog):
         self.translation_api_combo.currentIndexChanged.connect(self._sync_ai_settings_visibility)
         self._current_vendor = self.vendor_combo.currentText()
         self._install_chinese_context_menus()
+
+    def _build_font_size_row(self, label_text: str, role: str):
+        row = QHBoxLayout()
+        row.setSpacing(12)
+
+        label = QLabel(label_text)
+        label.setFixedWidth(72)
+
+        slider = QSlider(Qt.Horizontal)
+        slider.setObjectName(f"{role}FontSizeSlider")
+        slider.setRange(MIN_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE)
+        slider.setSingleStep(1)
+        slider.setPageStep(2)
+        slider.setTickInterval(4)
+        slider.setTickPosition(QSlider.TicksBelow)
+        slider.setValue(DEFAULT_TEXT_FONT_SIZE)
+
+        value_label = QLabel(f"{DEFAULT_TEXT_FONT_SIZE} px")
+        value_label.setObjectName("fontSizeValuePill")
+        value_label.setAlignment(Qt.AlignCenter)
+        value_label.setFixedWidth(58)
+
+        setattr(self, f"{role}_font_size_slider", slider)
+        setattr(self, f"{role}_font_size_value_label", value_label)
+        if role == "source":
+            self.source_font_size_spin = slider
+            self.source_font_size_spinbox = slider
+        else:
+            self.target_font_size_spin = slider
+            self.target_font_size_spinbox = slider
+
+        slider.valueChanged.connect(self._sync_font_size_preview)
+        row.addWidget(label)
+        row.addWidget(slider, 1)
+        row.addWidget(value_label)
+        return row
+
+    def _apply_display_preview_style(self):
+        palette = get_dialog_palette(self)
+        slider_groove = palette.surface_alt
+        slider_handle = palette.primary
+        slider_handle_hover = palette.primary_hover
+        slider_subpage = to_rgba(palette.primary, 0.50)
+        pill_bg = to_rgba(palette.primary, 0.12)
+        pill_border = to_rgba(palette.primary, 0.26)
+        preview_bg = palette.surface
+
+        slider_style = (
+            f"QSlider::groove:horizontal {{ background: {slider_groove}; height: 6px; border-radius: 3px; }}"
+            f"QSlider::sub-page:horizontal {{ background: {slider_subpage}; height: 6px; border-radius: 3px; }}"
+            f"QSlider::handle:horizontal {{ background: {slider_handle}; width: 16px; height: 16px; margin: -6px 0; border-radius: 8px; }}"
+            f"QSlider::handle:horizontal:hover {{ background: {slider_handle_hover}; }}"
+        )
+        for slider in (self.source_font_size_slider, self.target_font_size_slider):
+            slider.setStyleSheet(slider_style)
+
+        value_style = (
+            f"background: {pill_bg}; color: {palette.primary}; border: 1px solid {pill_border}; "
+            "border-radius: 10px; padding: 2px 6px; font-size: 14px; font-weight: 600;"
+        )
+        self.source_font_size_value_label.setStyleSheet(value_style)
+        self.target_font_size_value_label.setStyleSheet(value_style)
+        self.font_preview_card.setStyleSheet(
+            f"QFrame#fontPreviewCard {{ background: {preview_bg}; border: 1px solid {palette.border}; border-radius: 8px; }}"
+            f"QLabel#fontPreviewTitle {{ color: {palette.text_secondary}; font-size: 14px; font-weight: 700; padding: 0; }}"
+        )
+
+    def _sync_font_size_preview(self, *_args):
+        source_size = self.source_font_size_slider.value()
+        target_size = self.target_font_size_slider.value()
+        self.source_font_size_value_label.setText(f"{source_size} px")
+        self.target_font_size_value_label.setText(f"{target_size} px")
+        palette = get_dialog_palette(self)
+        self.source_font_preview.setStyleSheet(f"color: {palette.text}; font-size: {source_size}px; padding: 0;")
+        self.target_font_preview.setStyleSheet(f"color: {palette.text}; font-size: {target_size}px; padding: 0;")
     
     def _load_settings(self):
         self._load_form_from_config()
@@ -424,6 +537,11 @@ class SheZhiChuangKou(QDialog):
         hotkey = self.parent.config.get("shortcuts.copy_translate", "ctrl+c,c")
         if hasattr(self, "copy_hotkey_input"):
             self.copy_hotkey_input.setText((hotkey or "").strip())
+
+        if hasattr(self, "source_font_size_spin"):
+            self.source_font_size_spin.setValue(clamp_text_font_size(self.parent.config.get("display.source_font_size", 16)))
+        if hasattr(self, "target_font_size_spin"):
+            self.target_font_size_spin.setValue(clamp_text_font_size(self.parent.config.get("display.target_font_size", 16)))
 
         if hasattr(self, "auto_start_checkbox"):
             self._load_auto_start_state()
@@ -522,6 +640,11 @@ class SheZhiChuangKou(QDialog):
                     return
                 self.parent.config.set("shortcuts.copy_translate", hotkey)
 
+            if hasattr(self, "source_font_size_spin"):
+                self.parent.config.set("display.source_font_size", self.source_font_size_spin.value())
+            if hasattr(self, "target_font_size_spin"):
+                self.parent.config.set("display.target_font_size", self.target_font_size_spin.value())
+
             if hasattr(self, "auto_start_checkbox"):
                 if self.auto_start_checkbox.checkState() != Qt.PartiallyChecked:
                     auto_start = self.auto_start_checkbox.isChecked()
@@ -575,6 +698,8 @@ class SheZhiChuangKou(QDialog):
             self.parent.config.set("openai_compat.base_url", base_url)
             self.parent.config.set("openai_compat.model", self.model_input.text().strip())
             self.parent.config.set("openai_compat.api_key", self.api_key_input.text().strip())
+            if hasattr(self.parent, "apply_display_settings"):
+                self.parent.apply_display_settings()
             
             self.accept()
         except Exception as e:

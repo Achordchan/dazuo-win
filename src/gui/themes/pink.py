@@ -103,7 +103,7 @@ QLabel#serviceDisplayPill {
     border-radius: 14px;
     padding: 6px 12px;
     color: rgba(51, 51, 51, 0.78);
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 600;
 }
 
@@ -115,13 +115,13 @@ QFrame#langPill {
 
 QLabel#langPillLabel {
     color: rgba(51, 51, 51, 0.65);
-    font-size: 14px;
+    font-size: 16px;
     padding: 0;
 }
 
 QLabel#langPillChevron {
     color: rgba(51, 51, 51, 0.55);
-    font-size: 14px;
+    font-size: 16px;
     padding: 0;
 }
 
@@ -129,7 +129,7 @@ QComboBox#langComboPill {
     background: transparent;
     border: none;
     color: rgba(51, 51, 51, 0.86);
-    font-size: 14px;
+    font-size: 16px;
     padding: 2px 0;
     min-width: 130px;
 }
@@ -173,19 +173,19 @@ QFrame#serviceStatusPill {
 
 QLabel#serviceStatusLabel {
     color: rgba(51, 51, 51, 0.65);
-    font-size: 12px;
+    font-size: 14px;
     padding: 0;
 }
 
 QLabel#serviceSparkle {
     color: #B86AD9;
-    font-size: 13px;
+    font-size: 15px;
     padding: 0;
 }
 
 QLabel#serviceNameLabel {
     color: rgba(51, 51, 51, 0.82);
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 600;
     padding: 0;
 }
@@ -197,7 +197,7 @@ QWidget#serviceStatusDot {
 
 QLabel#serviceStatusText {
     color: rgba(76, 175, 80, 0.95);
-    font-size: 12px;
+    font-size: 14px;
     padding: 0;
 }
 
@@ -231,18 +231,18 @@ QFrame#infoCard {
 
 QLabel#infoTitle {
     color: rgba(51, 51, 51, 0.92);
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 700;
 }
 
 QLabel#infoBody {
     color: rgba(51, 51, 51, 0.78);
-    font-size: 11px;
+    font-size: 13px;
 }
 
 QLabel#infoSectionTitle {
     color: rgba(51, 51, 51, 0.58);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 700;
 }
 
@@ -263,12 +263,12 @@ QFrame#aiStatusBar {
 
 QLabel#aiStatusSparkles {
     color: rgba(51, 51, 51, 0.60);
-    font-size: 12px;
+    font-size: 14px;
 }
 
 QLabel#aiStatusText {
     color: rgba(51, 51, 51, 0.60);
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
 }
 
@@ -311,10 +311,12 @@ QDialog#settingsDialog QTabWidget#settingsTabs QTabBar::tab {
     color: rgba(51, 51, 51, 0.78);
     border: 1px solid #FFB6C1;
     border-bottom: none;
-    padding: 6px 16px;
+    padding: 8px 18px;
+    min-height: 24px;
     border-top-left-radius: 6px;
     border-top-right-radius: 6px;
     margin-right: 6px;
+    font-size: 16px;
 }
 
 QDialog#settingsDialog QTabWidget#settingsTabs QTabBar::tab:selected {
@@ -336,9 +338,19 @@ QDialog#settingsDialog QScrollArea::viewport {
     background-color: #FFC5C5;
 }
 
+QDialog#settingsDialog QLabel {
+    font-size: 17px;
+}
+
+QDialog#settingsDialog QPushButton,
+QDialog#settingsDialog QComboBox,
+QDialog#settingsDialog QCheckBox {
+    font-size: 17px;
+}
+
 QDialog#settingsDialog QLabel[help="true"] {
     color: rgba(51, 51, 51, 0.65);
-    font-size: 11px;
+    font-size: 13px;
     margin-top: 4px;
     margin-left: 4px;
 }
@@ -349,7 +361,7 @@ QDialog#settingsDialog QLineEdit {
     border-radius: 6px;
     padding: 8px 12px;
     color: #333333;
-    font-size: 13px;
+    font-size: 15px;
     min-height: 20px;
 }
 
@@ -368,7 +380,7 @@ QDialog#settingsDialog QGroupBox {
     margin-top: 20px;
     padding-top: 24px;
     color: #333333;
-    font-size: 14px;
+    font-size: 16px;
     font-weight: bold;
 }
 

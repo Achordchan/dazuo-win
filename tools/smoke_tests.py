@@ -37,10 +37,10 @@ class temporary_profile:
 def check_versions():
     from src.version import APP_VERSION
 
-    assert APP_VERSION == "1.2.6", APP_VERSION
+    assert APP_VERSION == "1.2.7", APP_VERSION
     for relative in ("setup.py", "version.generated.iss", "file_version_info.txt", "src/ziyuan/changelog.md"):
         text = (REPO_ROOT / relative).read_text(encoding="utf-8")
-        assert "1.2.6" in text, relative
+        assert "1.2.7" in text, relative
 
 
 def check_first_run_template():
@@ -92,6 +92,8 @@ def check_config_migration():
         profiles = config.get("openai_compat.profiles")
         assert profiles["自定义"]["base_url"] == "https://example.invalid/v1"
         assert profiles["自定义"]["model"] == "demo-model"
+        assert config.get("display.source_font_size") == 18
+        assert config.get("display.target_font_size") == 18
 
 
 def check_update_manifest_and_script():
@@ -534,7 +536,8 @@ def check_achord_payload_materialization():
 
 def check_settings_ui():
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
-    from PyQt5.QtWidgets import QApplication, QLabel, QWidget
+    from PyQt5.QtWidgets import QApplication, QLabel, QSlider, QWidget
+    from src.gui import shezhi_chuangkou
     from src.gui.shezhi_chuangkou import SheZhiChuangKou
     from src.shezhi.config import Config
 
@@ -542,30 +545,169 @@ def check_settings_ui():
         def __init__(self):
             super().__init__()
             self.config = Config()
+            self.display_apply_count = 0
 
         def reload_translation_api(self):
             pass
+
+        def apply_display_settings(self):
+            self.display_apply_count += 1
 
     with temporary_profile():
         Config._instance = None
         app = QApplication.instance() or QApplication(sys.argv)
         parent = Parent()
         parent.config.set("translation.api", "achord_builtin")
-        dialog = SheZhiChuangKou(parent)
-        dialog.translation_api_combo.setCurrentIndex(2)
-        dialog._sync_ai_settings_visibility()
-        text = " ".join(widget.text() for widget in dialog.findChildren(QLabel))
-        assert not dialog.achord_engine_group.isHidden()
-        assert dialog.deepl_settings_group.isHidden()
-        assert dialog.ai_settings_group.isHidden()
-        assert "DeepLX Key" not in text
-        assert "服务地址" not in text
+        parent.config.set("display.source_font_size", 18)
+        parent.config.set("display.target_font_size", 20)
+        original_get_state = shezhi_chuangkou.get_autostart_state
+        original_configure = shezhi_chuangkou.configure_autostart
+        shezhi_chuangkou.get_autostart_state = lambda: False
+        shezhi_chuangkou.configure_autostart = lambda enabled: None
+        try:
+            dialog = SheZhiChuangKou(parent)
+            dialog.translation_api_combo.setCurrentIndex(2)
+            dialog._sync_ai_settings_visibility()
+            text = " ".join(widget.text() for widget in dialog.findChildren(QLabel))
+            assert not dialog.achord_engine_group.isHidden()
+            assert dialog.deepl_settings_group.isHidden()
+            assert dialog.ai_settings_group.isHidden()
+            assert "DeepLX Key" not in text
+            assert "服务地址" not in text
+            assert dialog.source_font_size_spinbox is dialog.source_font_size_spin
+            assert dialog.target_font_size_spinbox is dialog.target_font_size_spin
+            assert isinstance(dialog.source_font_size_slider, QSlider)
+            assert isinstance(dialog.target_font_size_slider, QSlider)
+            assert dialog.source_font_size_slider.objectName() == "sourceFontSizeSlider"
+            assert dialog.target_font_size_slider.objectName() == "targetFontSizeSlider"
+            assert dialog.source_font_size_slider.minimum() == 12
+            assert dialog.source_font_size_slider.maximum() == 28
+            assert dialog.target_font_size_slider.minimum() == 12
+            assert dialog.target_font_size_slider.maximum() == 28
+            assert dialog.source_font_size_slider.value() == 18
+            assert dialog.target_font_size_slider.value() == 20
+            assert dialog.source_font_size_value_label.text() == "18 px"
+            assert dialog.target_font_size_value_label.text() == "20 px"
+            assert "原文示例：Hello，欢迎使用大佐翻译官" == dialog.source_font_preview.text()
+            assert "译文示例：你好，欢迎使用大佐翻译官" == dialog.target_font_preview.text()
+            assert dialog.font_preview_card.objectName() == "fontPreviewCard"
+            stylesheet = dialog.styleSheet()
+            assert "QTabBar::tab" in stylesheet
+            assert "min-height: 24px" in stylesheet
+            assert "padding: 8px 18px" in stylesheet
+            dialog.source_font_size_slider.setValue(19)
+            dialog.target_font_size_slider.setValue(22)
+            assert dialog.source_font_size_value_label.text() == "19 px"
+            assert dialog.target_font_size_value_label.text() == "22 px"
+            assert "font-size: 19px" in dialog.source_font_preview.styleSheet()
+            assert "font-size: 22px" in dialog.target_font_preview.styleSheet()
+            dialog._save_form_to_config()
+        finally:
+            shezhi_chuangkou.get_autostart_state = original_get_state
+            shezhi_chuangkou.configure_autostart = original_configure
+        assert parent.config.get("display.source_font_size") == 19
+        assert parent.config.get("display.target_font_size") == 22
+        assert parent.display_apply_count == 1
         dialog.close()
         parent.close()
 
 
+def check_text_font_size_settings():
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    from PyQt5.QtWidgets import QApplication, QTextEdit, QWidget
+    from src.gui.zhuchuangkou import ZhuChuangKou
+    from src.shezhi.config import Config
+
+    with temporary_profile():
+        Config._instance = None
+        app = QApplication.instance() or QApplication(sys.argv)
+        config = Config()
+        config.set("display.source_font_size", 10)
+        config.set("display.target_font_size", 30)
+
+        class Owner:
+            pass
+
+        themed_parent = QWidget()
+        themed_parent.setStyleSheet(
+            "QTextEdit { font-size: 16px; background-color: #202020; }"
+            "QTextEdit[readOnly=\"true\"] { font-size: 16px; }"
+        )
+        owner = Owner()
+        owner.config = config
+        owner.input_text = QTextEdit(themed_parent)
+        owner.output_text = QTextEdit(themed_parent)
+        owner.output_text.setReadOnly(True)
+        ZhuChuangKou._apply_text_font_sizes(owner)
+        assert owner.input_text.font().pixelSize() == 12
+        assert owner.output_text.font().pixelSize() == 28
+        assert owner.input_text.document().defaultFont().pixelSize() == 12
+        assert owner.output_text.document().defaultFont().pixelSize() == 28
+        assert "QTextEdit { font-size: 12px; }" in owner.input_text.styleSheet()
+        assert "QTextEdit[readOnly=\"true\"] { font-size: 28px; }" in owner.output_text.styleSheet()
+        assert owner.input_text.styleSheet().count("achord-display-font-size:start") == 1
+
+        config.set("display.source_font_size", 21)
+        ZhuChuangKou._apply_text_font_sizes(owner)
+        assert "QTextEdit { font-size: 21px; }" in owner.input_text.styleSheet()
+        assert "QTextEdit { font-size: 12px; }" not in owner.input_text.styleSheet()
+        assert owner.input_text.styleSheet().count("achord-display-font-size:start") == 1
+
+
+def check_mini_window_ui():
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    from PyQt5.QtCore import pyqtSignal
+    from PyQt5.QtWidgets import QApplication, QWidget
+    from src.gui.mini_chuangkou import MiniChuangKou
+    from src.shezhi.config import Config
+
+    class Parent(QWidget):
+        theme_changed = pyqtSignal()
+
+        def __init__(self):
+            super().__init__()
+            self.config = Config()
+            self.show_main_calls = 0
+
+        def show_main_window(self):
+            self.show_main_calls += 1
+
+    with temporary_profile():
+        Config._instance = None
+        app = QApplication.instance() or QApplication(sys.argv)
+        parent = Parent()
+        parent.config.set("theme", "dark")
+        parent.config.set("mini_window_opacity", 0.95)
+        mini = MiniChuangKou(parent)
+        try:
+            assert mini.title_label.text() == ""
+            assert not mini.title_label.isVisible()
+            assert mini.restore_btn.objectName() == "miniRestoreButton"
+            assert mini.restore_btn.text() == "↗"
+            assert mini.restore_btn.width() >= 28
+            assert mini.restore_btn.isEnabled()
+            assert not mini.restore_btn.isHidden()
+            assert mini.restore_btn.toolTip() == "切换到主窗口"
+            assert mini.output_text.font().pixelSize() >= 15
+            assert "font-size: 15px" in mini.output_text.styleSheet()
+            assert "PingFang" not in mini.output_text.styleSheet()
+            assert "border: none" in mini.output_text.styleSheet()
+            mini.set_output_text("hello")
+            assert mini.output_text.text() == "hello"
+            assert mini.surface.objectName() == "miniSurface"
+            assert "border-radius: 12px" in mini.surface.styleSheet()
+            assert "background: transparent" in mini.styleSheet()
+            assert "border: none" in mini.styleSheet()
+            mini.restore_btn.click()
+            assert parent.show_main_calls == 1
+        finally:
+            mini.close()
+            parent.close()
+
+
 def check_about_dialog_theme_ui():
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    from PyQt5.QtCore import Qt
     from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QWidget
     from src.gui.title_bar import AboutDialog
 
@@ -590,6 +732,9 @@ def check_about_dialog_theme_ui():
             assert dialog.findChild(QPushButton, "aboutCloseButton") is not None
             assert dialog.width() <= 640
             assert dialog.height() <= 680
+            assert dialog.contextMenuPolicy() == Qt.NoContextMenu
+            for child in dialog.findChildren(QWidget):
+                assert child.contextMenuPolicy() == Qt.NoContextMenu
             dialog.close()
             parent.close()
     finally:
@@ -626,6 +771,8 @@ def main() -> int:
         lambda: asyncio.run(check_achord_session()),
         check_achord_payload_materialization,
         check_settings_ui,
+        check_text_font_size_settings,
+        check_mini_window_ui,
         check_about_dialog_theme_ui,
         lambda: check_package(args.package),
     ]

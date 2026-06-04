@@ -51,7 +51,7 @@ class ZhuangTaiZhiShiQi(QWidget):
                 border: none;
                 border-radius: 4px;
                 padding: 2px 8px;
-                font-size: 12px;
+                font-size: 14px;
             }}
             QPushButton:hover {{
                 background-color: {palette.primary_hover};
