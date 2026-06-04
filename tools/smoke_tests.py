@@ -1,4 +1,5 @@
 import asyncio
+import configparser
 import json
 import os
 import argparse
@@ -136,6 +137,82 @@ def check_update_manifest_and_script():
             check=False,
         )
         assert result.returncode == 0, result.stderr or result.stdout
+
+
+def check_update_prompt_waits_for_changelog_modal():
+    from PyQt5.QtWidgets import QDialog
+    from src.gui import update_controller
+    from src.gui.update_controller import UpdateCoordinator
+
+    class FakeUpdater:
+        force_update = False
+
+        async def download_update(self):
+            return None
+
+    coordinator = UpdateCoordinator.__new__(UpdateCoordinator)
+    coordinator.owner = object()
+    coordinator.updater = FakeUpdater()
+    coordinator.progress_dialog = None
+    coordinator._update_checking = False
+    coordinator._update_error_occurred = False
+    coordinator._modal_dialog_active = False
+    coordinator._pending_update_prompt = None
+
+    config = configparser.ConfigParser()
+    config.add_section("App")
+    config.set("App", "first_run", "0")
+    config.set("App", "last_version", "0.0.0")
+
+    events = []
+    original_changelog = update_controller.GengXinRiZhi
+    original_prompt = update_controller.UpdatePromptDialog
+
+    class FakeChangelogDialog:
+        def __init__(self, owner):
+            events.append(("changelog_init", coordinator._modal_dialog_active))
+
+        def setModal(self, modal):
+            events.append(("changelog_modal", modal))
+
+        def exec_(self):
+            events.append(("changelog_exec", coordinator._modal_dialog_active))
+            coordinator.on_update_available("9.9.9", "notes", False)
+            events.append(("after_update_signal", coordinator._pending_update_prompt is not None))
+            return QDialog.Accepted
+
+    class FakeUpdatePromptDialog:
+        def __init__(self, owner, version, notes, force_update):
+            events.append(("prompt_init", coordinator._modal_dialog_active, version, notes, force_update))
+
+        def exec_(self):
+            events.append(("prompt_exec", coordinator._modal_dialog_active))
+            return QDialog.Rejected
+
+    update_controller.GengXinRiZhi = FakeChangelogDialog
+    update_controller.UpdatePromptDialog = FakeUpdatePromptDialog
+    coordinator.report_previous_update_state = lambda: None
+    coordinator.load_first_run_state = lambda: (config, str(REPO_ROOT / "unused-first-run.ini"))
+    coordinator.persist_first_run_state = lambda saved_config, path: events.append(
+        ("persist", saved_config.get("App", "first_run"), saved_config.get("App", "last_version"))
+    )
+    try:
+        coordinator.show_changelog_if_needed()
+    finally:
+        update_controller.GengXinRiZhi = original_changelog
+        update_controller.UpdatePromptDialog = original_prompt
+
+    assert events == [
+        ("changelog_init", True),
+        ("changelog_modal", True),
+        ("changelog_exec", True),
+        ("after_update_signal", True),
+        ("persist", "1", update_controller.APP_VERSION),
+        ("prompt_init", True, "9.9.9", "notes", False),
+        ("prompt_exec", True),
+    ]
+    assert coordinator._pending_update_prompt is None
+    assert coordinator._modal_dialog_active is False
 
 
 def check_autostart():
@@ -764,6 +841,7 @@ def main() -> int:
         check_license_notices,
         check_config_migration,
         check_update_manifest_and_script,
+        check_update_prompt_waits_for_changelog_modal,
         check_autostart,
         check_autostart_unknown_does_not_save_false,
         check_legacy_installer_reuses_existing_install_dir,

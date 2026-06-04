@@ -120,6 +120,8 @@ class UpdateCoordinator:
         self.progress_dialog = None
         self._update_checking = False
         self._update_error_occurred = False
+        self._modal_dialog_active = False
+        self._pending_update_prompt = None
 
         self.updater.update_available.connect(self.on_update_available)
         self.updater.update_progress.connect(self.on_update_progress)
@@ -193,6 +195,7 @@ class UpdateCoordinator:
             logger.error(f"写入配置文件失败: {error}")
 
     def show_changelog_if_needed(self):
+        self._modal_dialog_active = True
         try:
             self.report_previous_update_state()
             config, config_path = self.load_first_run_state()
@@ -215,6 +218,9 @@ class UpdateCoordinator:
                 self.persist_first_run_state(config, config_path)
         except Exception as error:
             logger.error(f"显示更新日志失败: {error}")
+        finally:
+            self._modal_dialog_active = False
+            self._flush_pending_update_prompt()
 
     def check_update(self, show_no_update_message: bool = False):
         if self._update_checking:
@@ -236,11 +242,30 @@ class UpdateCoordinator:
         self.check_update(show_no_update_message=True)
 
     def on_update_available(self, version, notes, force_update):
-        dialog = UpdatePromptDialog(self.owner, version, notes, force_update)
-        result = dialog.exec_()
+        if self._modal_dialog_active:
+            self._pending_update_prompt = (version, notes, force_update)
+            return
+
+        self._show_update_prompt(version, notes, force_update)
+
+    def _flush_pending_update_prompt(self):
+        if self._modal_dialog_active or not self._pending_update_prompt:
+            return
+        version, notes, force_update = self._pending_update_prompt
+        self._pending_update_prompt = None
+        self._show_update_prompt(version, notes, force_update)
+
+    def _show_update_prompt(self, version, notes, force_update):
+        self._modal_dialog_active = True
+        try:
+            dialog = UpdatePromptDialog(self.owner, version, notes, force_update)
+            result = dialog.exec_()
+        finally:
+            self._modal_dialog_active = False
         if result == QDialog.Accepted:
             self._ensure_progress_dialog()
             asyncio.get_event_loop().create_task(self.updater.download_update())
+            self._flush_pending_update_prompt()
             return
 
         if force_update:
@@ -252,6 +277,7 @@ class UpdateCoordinator:
                 buttons=QMessageBox.Ok,
             )
             sys.exit(0)
+        self._flush_pending_update_prompt()
 
     def on_update_progress(self, progress):
         if self.progress_dialog is not None:
