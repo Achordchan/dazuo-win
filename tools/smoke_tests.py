@@ -564,6 +564,38 @@ def check_settings_ui():
         parent.close()
 
 
+def check_about_dialog_theme_ui():
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+    from src.gui.title_bar import AboutDialog
+
+    class Parent(QWidget):
+        def __init__(self, theme: str):
+            super().__init__()
+            self.config = {"theme": theme}
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    original_load_avatar = AboutDialog._load_avatar
+    AboutDialog._load_avatar = lambda self, url: self._set_placeholder_avatar()
+    try:
+        for theme in ("light", "pink", "dark"):
+            parent = Parent(theme)
+            dialog = AboutDialog(parent)
+            stylesheet = dialog.styleSheet()
+            assert "#aboutCard" in stylesheet
+            assert "#aboutSection" in stylesheet
+            assert "#aboutCloseButton" in stylesheet
+            assert dialog.findChild(QLabel, "aboutVersionBadge") is not None
+            assert len(dialog.findChildren(QPushButton, "aboutLinkButton")) == 2
+            assert dialog.findChild(QPushButton, "aboutCloseButton") is not None
+            assert dialog.width() <= 640
+            assert dialog.height() <= 680
+            dialog.close()
+            parent.close()
+    finally:
+        AboutDialog._load_avatar = original_load_avatar
+
+
 def check_package(package_path: Path | None = None):
     from src.version import APP_VERSION
     from tools.verify_windows_package import verify_package
@@ -594,6 +626,7 @@ def main() -> int:
         lambda: asyncio.run(check_achord_session()),
         check_achord_payload_materialization,
         check_settings_ui,
+        check_about_dialog_theme_ui,
         lambda: check_package(args.package),
     ]
     for check in checks:

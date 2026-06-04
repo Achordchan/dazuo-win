@@ -203,7 +203,7 @@ QLabel#serviceStatusText {
 
 QPushButton#floatingIconButton {
     background-color: rgba(45, 45, 45, 0.60);
-    border: none;
+    border: 1px solid rgba(255, 255, 255, 0.18);
     border-radius: 4px;
     min-width: 28px;
     padding: 4px;
@@ -438,8 +438,6 @@ BiaoTiLan {
 
 BiaoTiLan QLabel {
     color: #FFFFFF;
-    font-size: 14px;
-    font-weight: 500;
 }
 
 BiaoTiLan QPushButton {
@@ -456,31 +454,6 @@ BiaoTiLan QPushButton:hover {
 }
 
 BiaoTiLan QPushButton:pressed {
-    background: rgba(255, 255, 255, 0.2);
-}
-
-/* 窗口控制按钮样式 */
-QPushButton[toolTip="最小化"],
-QPushButton[toolTip="最大化"],
-QPushButton[toolTip="还原"] {
-    background: transparent;
-    border: none;
-    color: #CCCCCC;
-    font-family: "SimHei";
-    font-size: 16px;
-    padding: 0;
-    min-width: 32px;
-}
-
-QPushButton[toolTip="最小化"]:hover,
-QPushButton[toolTip="最大化"]:hover,
-QPushButton[toolTip="还原"]:hover {
-    background: rgba(255, 255, 255, 0.1);
-}
-
-QPushButton[toolTip="最小化"]:pressed,
-QPushButton[toolTip="最大化"]:pressed,
-QPushButton[toolTip="还原"]:pressed {
     background: rgba(255, 255, 255, 0.2);
 }
 

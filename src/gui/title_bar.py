@@ -6,7 +6,7 @@ from PyQt5.QtCore import Qt, QSize, QUrl
 from PyQt5.QtGui import QDesktopServices, QIcon, QPixmap, QPainter, QPainterPath, QColor
 from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply, QSslSocket
 
-from .dialog_utils import build_icon_button_stylesheet, build_link_button_stylesheet, get_dialog_palette
+from .dialog_utils import build_icon_button_stylesheet, build_link_button_stylesheet, get_dialog_palette, to_rgba
 from .icon_provider import themed_icon, resource_path
 from . import window_geometry as _window_geometry
 from ..version import APP_VERSION
@@ -17,85 +17,158 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self._parent = parent
         self.setWindowTitle("关于")
-        self.setFixedSize(560, 560)
+        self.setFixedSize(620, 650)
         self.setObjectName("aboutDialog")
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(0)
 
         card = QFrame()
         card.setObjectName("aboutCard")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(28, 24, 28, 24)
-        card_layout.setSpacing(14)
+        card_layout.setContentsMargins(24, 22, 24, 22)
+        card_layout.setSpacing(16)
 
         shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(24)
-        shadow.setOffset(0, 8)
-        shadow.setColor(QColor(0, 0, 0, 40))
+        shadow.setBlurRadius(26)
+        shadow.setOffset(0, 10)
+        shadow.setColor(QColor(0, 0, 0, 90 if self._theme_name() == "dark" else 34))
         card.setGraphicsEffect(shadow)
 
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(16)
+
         self.avatar_label = QLabel()
-        self.avatar_label.setFixedSize(88, 88)
+        self.avatar_label.setFixedSize(76, 76)
         self.avatar_label.setAlignment(Qt.AlignCenter)
         self.avatar_label.setObjectName("aboutAvatar")
-        card_layout.addWidget(self.avatar_label, alignment=Qt.AlignHCenter)
+        header.addWidget(self.avatar_label, alignment=Qt.AlignTop)
 
+        header_text = QVBoxLayout()
+        header_text.setContentsMargins(0, 2, 0, 0)
+        header_text.setSpacing(6)
+
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(10)
         title_label = QLabel("大佐翻译官")
         title_label.setObjectName("aboutTitle")
-        title_label.setAlignment(Qt.AlignCenter)
-        card_layout.addWidget(title_label)
+        title_row.addWidget(title_label)
+        version_badge = QLabel(f"v{APP_VERSION}")
+        version_badge.setObjectName("aboutVersionBadge")
+        title_row.addWidget(version_badge)
+        title_row.addStretch()
+        header_text.addLayout(title_row)
 
-        subtitle_label = QLabel(f"版本：v{APP_VERSION}")
-        subtitle_label.setObjectName("aboutMeta")
-        subtitle_label.setAlignment(Qt.AlignCenter)
-        card_layout.addWidget(subtitle_label)
+        subtitle_label = QLabel("开源 AI 翻译助手")
+        subtitle_label.setObjectName("aboutSubtitle")
+        header_text.addWidget(subtitle_label)
 
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(10)
-        info_layout.addWidget(self._build_info_row("author", "作者：Achord"))
-        info_layout.addWidget(self._build_info_row("phone", "Tel: 13160235855"))
-        info_layout.addWidget(
-            self._build_info_row("mail", "Email: <a href='mailto:achordchan@gmail.com'>achordchan@gmail.com</a>")
+        summary_label = QLabel("提供多翻译服务接入、快捷呼出和内置翻译引擎能力。")
+        summary_label.setObjectName("aboutSummary")
+        summary_label.setWordWrap(True)
+        header_text.addWidget(summary_label)
+        header.addLayout(header_text, 1)
+        card_layout.addLayout(header)
+
+        divider = QFrame()
+        divider.setObjectName("aboutDivider")
+        divider.setFrameShape(QFrame.HLine)
+        card_layout.addWidget(divider)
+
+        project_section = self._build_section(
+            "项目信息",
+            [
+                ("author", "作者", "Achord"),
+                ("version", "当前版本", f"v{APP_VERSION}"),
+                ("license", "软件许可", "MIT License"),
+            ],
         )
-        info_layout.addWidget(self._build_info_row("version", f"版本：v{APP_VERSION}"))
-        info_layout.addWidget(self._build_info_row("license", "许可：MIT License"))
-        info_layout.addWidget(self._build_info_row("license", "内置引擎：Powered by DeepLX / OwO Network"))
-        info_layout.addWidget(
-            self._build_info_row(
-                "license",
-                "第三方许可：MIT License，Copyright (c) 2022 OwO Network Limited",
-            )
+        card_layout.addWidget(project_section)
+
+        contact_section = self._build_section(
+            "联系与反馈",
+            [
+                ("phone", "电话", "13160235855"),
+                ("mail", "邮箱", "<a href='mailto:achordchan@gmail.com'>achordchan@gmail.com</a>"),
+            ],
         )
-        card_layout.addLayout(info_layout)
+        card_layout.addWidget(contact_section)
+
+        engine_section = self._build_section(
+            "第三方组件",
+            [
+                ("license", "内置引擎", "Powered by DeepLX / OwO Network"),
+                ("license", "许可声明", "MIT License，Copyright (c) 2022 OwO Network Limited"),
+            ],
+        )
+        card_layout.addWidget(engine_section)
 
         actions_layout = QHBoxLayout()
-        actions_layout.setSpacing(12)
+        actions_layout.setContentsMargins(0, 2, 0, 0)
+        actions_layout.setSpacing(10)
         actions_layout.addWidget(self._build_action_button("link", "项目地址", "https://gitee.com/Achordchan/dazuofanyiguan"))
         actions_layout.addWidget(self._build_action_button("link", "问题反馈", "https://gitee.com/Achordchan/dazuofanyiguan/issues"))
+        actions_layout.addStretch()
+        close_button = QPushButton("关闭")
+        close_button.setObjectName("aboutCloseButton")
+        close_button.setCursor(Qt.PointingHandCursor)
+        close_button.clicked.connect(self.accept)
+        actions_layout.addWidget(close_button)
         card_layout.addLayout(actions_layout)
 
         layout.addWidget(card)
         self._apply_style()
         self._load_avatar(resource_path("头像.jpg"))
 
-    def _build_info_row(self, icon_name: str, text: str):
+    def _build_section(self, title: str, rows: list[tuple[str, str, str]]):
+        section = QFrame()
+        section.setObjectName("aboutSection")
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(9)
+        title_label = QLabel(title)
+        title_label.setObjectName("aboutSectionTitle")
+        layout.addWidget(title_label)
+        for icon_name, label, value in rows:
+            layout.addWidget(self._build_info_row(icon_name, label, value))
+        return section
+
+    def _build_info_row(self, icon_name: str, label: str, value: str):
         row_widget = QWidget()
+        row_widget.setMinimumHeight(26)
         row = QHBoxLayout(row_widget)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(10)
+        row.setSpacing(9)
         icon_label = QLabel()
         icon_label.setObjectName("aboutIcon")
         icon_label.setPixmap(themed_icon(icon_name, self._theme_name(), "secondary").pixmap(QSize(16, 16)))
-        icon_label.setFixedWidth(20)
-        text_label = QLabel(text)
-        text_label.setObjectName("aboutInfo")
+        icon_label.setFixedSize(20, 20)
+        row.addWidget(icon_label, alignment=Qt.AlignTop)
+
+        label_widget = QLabel(label)
+        label_widget.setObjectName("aboutInfoLabel")
+        label_widget.setFixedWidth(76)
+        label_widget.setMinimumHeight(22)
+        row.addWidget(label_widget, alignment=Qt.AlignTop)
+
+        if "<a " in value and "style=" not in value:
+            value = value.replace(
+                "<a ",
+                f"<a style='color:{get_dialog_palette(self._parent).primary}; text-decoration:none;' ",
+                1,
+            )
+        text_label = QLabel(value)
+        text_label.setObjectName("aboutInfoValue")
         text_label.setTextFormat(Qt.RichText)
+        text_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
         text_label.setOpenExternalLinks(True)
         text_label.setWordWrap(True)
-        row.addWidget(icon_label)
-        row.addWidget(text_label, 1)
+        text_label.setMinimumHeight(22)
+        row.addWidget(text_label, 1, alignment=Qt.AlignTop)
         return row_widget
 
     def _build_action_button(self, icon_name: str, text: str, url: str):
@@ -103,6 +176,7 @@ class AboutDialog(QDialog):
         button.setObjectName("aboutLinkButton")
         button.setIcon(themed_icon(icon_name, self._theme_name(), "primary"))
         button.setIconSize(QSize(14, 14))
+        button.setMinimumWidth(108)
         button.setCursor(Qt.PointingHandCursor)
         button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(url)))
         return button
@@ -114,43 +188,29 @@ class AboutDialog(QDialog):
 
     def _apply_style(self):
         theme_name = self._theme_name()
-
-        palette = {
-            "dark": {
-                "dialog": "#171d25",
-                "card": "#202833",
-                "avatar": "#2b3543",
-                "text": "#f2f6fb",
-                "subtext": "#9fb0c4",
-                "accent": "#7ab7ff",
-            },
-            "light": {
-                "dialog": "#f6f8fb",
-                "card": "#ffffff",
-                "avatar": "#e8eef5",
-                "text": "#3a3f45",
-                "subtext": "#708090",
-                "accent": "#1f7ae0",
-            },
-            "pink": {
-                "dialog": "#fff5f8",
-                "card": "#fffafb",
-                "avatar": "#f7e7ee",
-                "text": "#533846",
-                "subtext": "#8e7281",
-                "accent": "#cc5c8a",
-            },
-        }
-        c = palette.get(theme_name, palette["dark"])
+        palette = get_dialog_palette(self._parent)
+        soft_primary = to_rgba(palette.primary, 0.14 if theme_name != "dark" else 0.18)
+        soft_border = to_rgba(palette.primary, 0.20 if theme_name != "dark" else 0.28)
+        muted_surface = palette.surface_alt if theme_name == "dark" else palette.background
+        link_hover = palette.secondary_hover
         self.setStyleSheet(
-            f"#aboutDialog {{ background: {c['dialog']}; }}"
-            f"#aboutCard {{ background: {c['card']}; border-radius: 16px; }}"
-            f"#aboutAvatar {{ background: {c['avatar']}; border-radius: 44px; border: 2px solid {c['card']}; }}"
-            f"#aboutTitle {{ color: {c['text']}; font-size: 18px; font-weight: 700; }}"
-            f"#aboutMeta {{ color: {c['subtext']}; font-size: 12px; margin-bottom: 6px; }}"
-            f"#aboutInfo {{ color: {c['text']}; font-size: 13px; }}"
-            f"#aboutLinkButton {{ background: {c['card']}; color: {c['accent']}; border: 1px solid {c['accent']}; border-radius: 10px; min-height: 34px; padding: 0 14px; text-align: left; }}"
-            f"#aboutLinkButton:hover {{ background: {c['avatar']}; }}"
+            f"#aboutDialog {{ background: {palette.background}; }}"
+            f"#aboutCard {{ background: {palette.surface}; border: 1px solid {palette.border}; border-radius: 16px; }}"
+            f"#aboutAvatar {{ background: {soft_primary}; border-radius: 38px; border: 1px solid {soft_border}; }}"
+            f"#aboutTitle {{ color: {palette.text}; font-size: 22px; font-weight: 700; padding: 0; }}"
+            f"#aboutVersionBadge {{ background: {soft_primary}; color: {palette.primary}; border: 1px solid {soft_border}; border-radius: 10px; padding: 2px 9px; font-size: 12px; font-weight: 700; }}"
+            f"#aboutSubtitle {{ color: {palette.text}; font-size: 13px; font-weight: 600; padding: 0; }}"
+            f"#aboutSummary {{ color: {palette.text_secondary}; font-size: 12px; padding: 0; }}"
+            f"#aboutDivider {{ color: {palette.border}; background: {palette.border}; max-height: 1px; border: none; }}"
+            f"#aboutSection {{ background: {muted_surface}; border: 1px solid {palette.border}; border-radius: 12px; }}"
+            f"#aboutSectionTitle {{ color: {palette.text_secondary}; font-size: 12px; font-weight: 700; padding: 0; }}"
+            f"#aboutInfoLabel {{ color: {palette.text_secondary}; font-size: 12px; padding: 0; }}"
+            f"#aboutInfoValue {{ color: {palette.text}; font-size: 13px; padding: 0; }}"
+            f"#aboutInfoValue a {{ color: {palette.primary}; text-decoration: none; }}"
+            f"#aboutLinkButton {{ background: transparent; color: {palette.primary}; border: 1px solid {soft_border}; border-radius: 9px; min-height: 32px; padding: 0 12px; text-align: left; font-weight: 600; }}"
+            f"#aboutLinkButton:hover {{ background: {link_hover}; }}"
+            f"#aboutCloseButton {{ background: {palette.primary}; color: #FFFFFF; border: 1px solid {palette.primary}; border-radius: 9px; min-width: 76px; min-height: 32px; padding: 0 16px; font-weight: 600; }}"
+            f"#aboutCloseButton:hover {{ background: {palette.primary_hover}; border-color: {palette.primary_hover}; }}"
         )
 
     def _load_avatar(self, url: str):
