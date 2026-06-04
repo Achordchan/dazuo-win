@@ -37,11 +37,10 @@ class temporary_profile:
 def check_versions():
     from src.version import APP_VERSION
 
-    assert APP_VERSION == "1.2.5", APP_VERSION
+    assert APP_VERSION == "1.2.6", APP_VERSION
     for relative in ("setup.py", "version.generated.iss", "file_version_info.txt", "src/ziyuan/changelog.md"):
         text = (REPO_ROOT / relative).read_text(encoding="utf-8")
-        assert "1.2.5" in text, relative
-        assert "1.2.6" not in text, relative
+        assert "1.2.6" in text, relative
 
 
 def check_first_run_template():
@@ -97,11 +96,12 @@ def check_config_migration():
 
 def check_update_manifest_and_script():
     from src.gongju.update import Updater
+    from src.version import APP_VERSION
 
     with tempfile.TemporaryDirectory(prefix="dzfyq_update_smoke_") as temp:
         root = Path(temp)
         updater = Updater()
-        updater.latest_version = "1.2.5"
+        updater.latest_version = APP_VERSION
         try:
             updater._validate_update_manifest(str(root))
             raise AssertionError("missing manifest accepted")
@@ -113,7 +113,7 @@ def check_update_manifest_and_script():
             raise AssertionError("mismatched manifest accepted")
         except RuntimeError:
             pass
-        (root / "update_manifest.json").write_text(json.dumps({"app_version": "1.2.5"}), encoding="utf-8")
+        (root / "update_manifest.json").write_text(json.dumps({"app_version": APP_VERSION}), encoding="utf-8")
         updater._validate_update_manifest(str(root))
 
         script_path = root / "apply_update.ps1"
@@ -190,6 +190,293 @@ def check_autostart_unknown_does_not_save_false():
         finally:
             shezhi_chuangkou.get_autostart_state = original_get_state
             shezhi_chuangkou.configure_autostart = original_configure
+
+
+def check_legacy_installer_reuses_existing_install_dir():
+    import tools.legacy_update_installer as installer
+
+    with temporary_profile() as root:
+        default_dir = installer._default_install_dir()
+        custom_dir = root / "ExistingInstall" / installer.APP_NAME
+        default_dir.mkdir(parents=True)
+        custom_dir.mkdir(parents=True)
+        (default_dir / installer.EXE_NAME).write_text("wrong 1.2.5 install", encoding="utf-8")
+        (custom_dir / installer.EXE_NAME).write_text("existing install", encoding="utf-8")
+
+        originals = (
+            installer._registry_install_dirs,
+            installer._running_install_dirs,
+            installer._shortcut_install_dirs,
+            installer._known_install_dirs,
+        )
+        installer._registry_install_dirs = lambda: []
+        installer._running_install_dirs = lambda: []
+        installer._shortcut_install_dirs = lambda: [default_dir]
+        installer._known_install_dirs = lambda: [custom_dir, default_dir]
+        try:
+            candidates = installer._install_candidates_by_source()
+            assert installer._choose_install_dir(candidates) == custom_dir
+            assert installer._install_dir() == custom_dir
+        finally:
+            (
+                installer._registry_install_dirs,
+                installer._running_install_dirs,
+                installer._shortcut_install_dirs,
+                installer._known_install_dirs,
+            ) = originals
+
+
+def check_window_geometry_keeps_recoverable_screen_area():
+    from PyQt5.QtCore import QPoint, QRect
+    from src.gui import window_geometry
+
+    class FakeScreen:
+        def __init__(self, available):
+            self.available = QRect(available)
+
+        def availableGeometry(self):
+            return QRect(self.available)
+
+    class FakeApplication:
+        screen = FakeScreen(QRect(0, 0, 800, 600))
+
+        @classmethod
+        def primaryScreen(cls):
+            return cls.screen
+
+        @classmethod
+        def screenAt(cls, point):
+            return cls.screen if cls.screen.available.contains(point) else None
+
+        @classmethod
+        def screens(cls):
+            return [cls.screen]
+
+    class RaisingApplication:
+        @classmethod
+        def primaryScreen(cls):
+            raise AssertionError("cached resize should not query QApplication.primaryScreen")
+
+        @classmethod
+        def screenAt(cls, point):
+            raise AssertionError("cached resize should not query QApplication.screenAt")
+
+        @classmethod
+        def screens(cls):
+            raise AssertionError("cached resize should not query QApplication.screens")
+
+    class FakeConfig:
+        def __init__(self, window):
+            self._config = {"window": dict(window)}
+            self.save_count = 0
+
+        def get(self, key, default=None):
+            current = self._config
+            for part in key.split("."):
+                if not isinstance(current, dict) or part not in current:
+                    return default
+                current = current[part]
+            return current
+
+        def save(self):
+            self.save_count += 1
+
+    class FakeWindow:
+        def __init__(self, window_config, available, minimum=(969, 684)):
+            FakeApplication.screen = FakeScreen(available)
+            self.config = FakeConfig(window_config)
+            self._geometry = QRect(0, 0, 969, 684)
+            self._minimum = minimum
+            self._maximum = (16777215, 16777215)
+            self.is_mini_mode = False
+
+        def windowHandle(self):
+            return None
+
+        def screen(self):
+            return FakeApplication.screen
+
+        def minimumWidth(self):
+            return self._minimum[0]
+
+        def minimumHeight(self):
+            return self._minimum[1]
+
+        def setMinimumSize(self, width, height):
+            self._minimum = (width, height)
+
+        def maximumWidth(self):
+            return self._maximum[0]
+
+        def maximumHeight(self):
+            return self._maximum[1]
+
+        def width(self):
+            return self._geometry.width()
+
+        def height(self):
+            return self._geometry.height()
+
+        def geometry(self):
+            return QRect(self._geometry)
+
+        def setGeometry(self, *args):
+            self._geometry = QRect(*args)
+
+        def isMaximized(self):
+            return False
+
+    def visible_rect(rect, available):
+        return QRect(available).intersected(rect)
+
+    original_application = window_geometry.QApplication
+    window_geometry.QApplication = FakeApplication
+    try:
+        available_800 = QRect(0, 0, 800, 600)
+        oversized = FakeWindow(
+            {"width": 3000, "height": 2000, "x": 10, "y": 20},
+            available_800,
+        )
+        window_geometry.load_window_geometry(oversized)
+        assert oversized.geometry() == QRect(10, 20, 800, 600)
+        assert oversized.config._config["window"] == {"width": 800, "height": 600, "x": 10, "y": 20}
+
+        partially_offscreen = FakeWindow(
+            {"width": 500, "height": 400, "x": -120, "y": 80},
+            available_800,
+            minimum=(300, 200),
+        )
+        window_geometry.load_window_geometry(partially_offscreen)
+        assert partially_offscreen.geometry() == QRect(-120, 80, 500, 400)
+        assert partially_offscreen.config.save_count == 0
+
+        negative_screen = FakeWindow(
+            {"width": 500, "height": 400, "x": -1200, "y": 40},
+            QRect(-1280, 0, 1280, 720),
+            minimum=(300, 200),
+        )
+        window_geometry.load_window_geometry(negative_screen)
+        assert negative_screen.geometry() == QRect(-1200, 40, 500, 400)
+
+        available_1920 = QRect(0, 0, 1920, 1080)
+        offscreen = FakeWindow(
+            {"width": 1000, "height": 700, "x": 5000, "y": -300},
+            available_1920,
+        )
+        window_geometry.load_window_geometry(offscreen)
+        visible = visible_rect(offscreen.geometry(), available_1920)
+        assert visible.width() >= 96
+        assert visible.height() >= 64
+
+        small_screen = FakeWindow(
+            {"width": 857, "height": 620, "x": None, "y": None},
+            QRect(0, 0, 640, 480),
+        )
+        window_geometry.load_window_geometry(small_screen)
+        assert small_screen.geometry() == QRect(0, 0, 640, 480)
+        assert small_screen.minimumWidth() == 640
+        assert small_screen.minimumHeight() == 480
+
+        to_save = FakeWindow(
+            {"width": 857, "height": 620, "x": 0, "y": 0},
+            available_800,
+        )
+        to_save.setGeometry(-50, -50, 3000, 2000)
+        window_geometry.save_window_geometry(to_save)
+        assert to_save.geometry() == QRect(-50, 0, 800, 600)
+        assert to_save.config._config["window"] == {"width": 800, "height": 600, "x": -50, "y": 0}
+
+        partial_to_save = FakeWindow(
+            {"width": 500, "height": 400, "x": 0, "y": 0},
+            available_800,
+            minimum=(300, 200),
+        )
+        partial_to_save.setGeometry(-120, 80, 500, 400)
+        window_geometry.save_window_geometry(partial_to_save)
+        assert partial_to_save.geometry() == QRect(-120, 80, 500, 400)
+        assert partial_to_save.config._config["window"] == {"width": 500, "height": 400, "x": -120, "y": 80}
+
+        offscreen_to_save = FakeWindow(
+            {"width": 500, "height": 400, "x": 0, "y": 0},
+            available_800,
+            minimum=(300, 200),
+        )
+        offscreen_to_save.setGeometry(5000, 5000, 500, 400)
+        window_geometry.save_window_geometry(offscreen_to_save)
+        visible = visible_rect(offscreen_to_save.geometry(), available_800)
+        assert visible.width() >= 96
+        assert visible.height() >= 64
+
+        barely_visible_to_save = FakeWindow(
+            {"width": 500, "height": 400, "x": 0, "y": 0},
+            available_800,
+            minimum=(300, 200),
+        )
+        barely_visible_to_save.setGeometry(-480, 80, 500, 400)
+        window_geometry.save_window_geometry(barely_visible_to_save)
+        visible = visible_rect(barely_visible_to_save.geometry(), available_800)
+        assert visible.width() >= 96
+        assert visible.height() >= 64
+        assert barely_visible_to_save.geometry().x() != -480
+
+        resized = FakeWindow(
+            {"width": 790, "height": 590, "x": 10, "y": 10},
+            available_800,
+        )
+        resized.setGeometry(10, 10, 790, 590)
+        resized._resize_start_pos = QPoint(0, 0)
+        resized._resize_start_geometry = QRect(resized.geometry())
+        resized._resize_edge = "bottom-right"
+        window_geometry.perform_resize(resized, QPoint(2000, 2000))
+        assert resized.geometry() == QRect(10, 10, 800, 600)
+
+        left_resized = FakeWindow(
+            {"width": 790, "height": 590, "x": 100, "y": 100},
+            available_800,
+            minimum=(300, 200),
+        )
+        left_resized.setGeometry(100, 100, 790, 590)
+        left_resized._resize_start_pos = QPoint(0, 0)
+        left_resized._resize_start_geometry = QRect(left_resized.geometry())
+        left_resized._resize_edge = "left"
+        window_geometry.perform_resize(left_resized, QPoint(-2000, 0))
+        assert left_resized.geometry() == QRect(90, 100, 800, 590)
+
+        programmatic_resize = FakeWindow(
+            {"width": 500, "height": 400, "x": 0, "y": 0},
+            available_800,
+            minimum=(300, 200),
+        )
+        programmatic_resize.setGeometry(-120, 80, 3000, 2000)
+        window_geometry.protect_window_size(programmatic_resize)
+        assert programmatic_resize.geometry() == QRect(-120, 80, 800, 600)
+
+        dragged = FakeWindow(
+            {"width": 500, "height": 400, "x": 0, "y": 0},
+            available_800,
+            minimum=(300, 200),
+        )
+        dragged.setGeometry(-120, 80, 500, 400)
+        window_geometry.begin_move(dragged)
+        assert window_geometry.constrain_move_position(dragged, QPoint(-220, -80)) == QPoint(-220, 0)
+        assert window_geometry.constrain_move_position(dragged, QPoint(-220, 120)) == QPoint(-220, 120)
+        window_geometry.end_move(dragged)
+        assert dragged._move_available_geometries is None
+
+        cached_resize = FakeWindow(
+            {"width": 790, "height": 590, "x": 10, "y": 10},
+            available_800,
+        )
+        cached_resize.setGeometry(10, 10, 790, 590)
+        window_geometry.begin_resize(cached_resize, "bottom-right", QPoint(0, 0))
+        window_geometry.QApplication = RaisingApplication
+        window_geometry.perform_resize(cached_resize, QPoint(2000, 2000))
+        assert cached_resize.geometry() == QRect(10, 10, 800, 600)
+        window_geometry.end_resize(cached_resize)
+        assert cached_resize._resize_available_geometry is None
+        assert cached_resize._resize_minimum_size is None
+    finally:
+        window_geometry.QApplication = original_application
 
 
 async def check_achord_session():
@@ -302,6 +589,8 @@ def main() -> int:
         check_update_manifest_and_script,
         check_autostart,
         check_autostart_unknown_does_not_save_false,
+        check_legacy_installer_reuses_existing_install_dir,
+        check_window_geometry_keeps_recoverable_screen_area,
         lambda: asyncio.run(check_achord_session()),
         check_achord_payload_materialization,
         check_settings_ui,

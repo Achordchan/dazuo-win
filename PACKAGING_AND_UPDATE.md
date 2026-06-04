@@ -63,7 +63,7 @@ python tools\verify_windows_package.py output\dazuofanyiguan_full.for.windows_$v
 `setup.iss` 已配置：
 - 中文界面
 - 默认安装到当前用户目录：`%LOCALAPPDATA%\Programs\大佐翻译官`
-- 不沿用旧安装目录，避免旧版 Program Files 安装阻断普通用户迁移
+- 沿用旧安装目录，避免已有用户升级时被重新安装到 C 盘并和旧版本并存
 - 程序图标
 - 开始菜单快捷方式
 - 桌面快捷方式（可选）

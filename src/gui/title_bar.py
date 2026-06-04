@@ -8,6 +8,7 @@ from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkRepl
 
 from .dialog_utils import build_icon_button_stylesheet, build_link_button_stylesheet, get_dialog_palette
 from .icon_provider import themed_icon, resource_path
+from . import window_geometry as _window_geometry
 from ..version import APP_VERSION
 
 
@@ -337,18 +338,21 @@ class BiaoTiLan(QWidget):
         """标按下事件"""
         if event.button() == Qt.LeftButton:
             self.parent._drag_start_pos = event.globalPos() - self.parent.pos()
+            _window_geometry.begin_move(self.parent)
             self.parent._is_dragging = True
             event.accept()
     
     def mouseMoveEvent(self, event):
         """鼠标移动事件"""
         if self.parent._is_dragging and event.buttons() == Qt.LeftButton:
-            self.parent.move(event.globalPos() - self.parent._drag_start_pos)
+            position = event.globalPos() - self.parent._drag_start_pos
+            self.parent.move(_window_geometry.constrain_move_position(self.parent, position))
             event.accept()
     
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
         self.parent._is_dragging = False
+        _window_geometry.end_move(self.parent)
         if hasattr(self.parent, "_schedule_save_window_geometry"):
             self.parent._schedule_save_window_geometry()
         event.accept()

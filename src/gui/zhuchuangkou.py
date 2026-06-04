@@ -618,11 +618,8 @@ class ZhuChuangKou(QMainWindow):
         if event.button() == Qt.LeftButton and not self.isMaximized():
             edge = self._get_edge(event.pos())
             if edge:
-                self._resize_edge = edge
+                _window_geometry.begin_resize(self, edge, event.globalPos())
                 self.setCursor(self._get_resize_cursor(edge))
-                self._resize_start_pos = event.globalPos()
-                self._resize_start_geometry = QRect(self.geometry())
-                self._is_dragging = False
                 event.accept()
                 return
         super().mousePressEvent(event)
@@ -643,12 +640,17 @@ class ZhuChuangKou(QMainWindow):
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
         if hasattr(self, '_resize_edge') and self._resize_edge:
-            self._resize_edge = None
+            _window_geometry.end_resize(self)
             self.setCursor(Qt.ArrowCursor)
             self._schedule_save_window_geometry()
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not getattr(self, '_resize_edge', None):
+            _window_geometry.protect_window_size(self)
 
     def _perform_resize(self, global_pos: QPoint):
         _window_geometry.perform_resize(self, global_pos)
