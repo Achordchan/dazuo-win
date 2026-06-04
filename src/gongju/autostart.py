@@ -81,6 +81,19 @@ def _normalize_path(path: str) -> str:
     return os.path.normcase(os.path.abspath(os.path.expandvars(path or "")))
 
 
+def _paths_equivalent(left: str, right: str) -> bool:
+    normalized_left = _normalize_path(left)
+    normalized_right = _normalize_path(right)
+    if normalized_left == normalized_right:
+        return True
+    if not normalized_left or not normalized_right:
+        return False
+    try:
+        return os.path.samefile(normalized_left, normalized_right)
+    except OSError:
+        return False
+
+
 def _format_windows_arguments(arguments: List[str]) -> str:
     return subprocess.list2cmdline(arguments)
 
@@ -183,28 +196,59 @@ def _get_windows_shortcut_path() -> str:
     return os.path.join(_get_windows_startup_dir(), "大佐翻译官.lnk")
 
 
-def _windows_shortcut_matches(shortcut_path: str) -> bool:
+def _windows_shortcut_mismatch_reason(shortcut_path: str) -> str:
     try:
         shortcut = _read_windows_shortcut(shortcut_path)
     except Exception as exc:
         logger.warning("无法读取开机自启快捷方式，按未启用处理: %s", exc)
-        return False
+        return "unreadable"
 
     command = _get_launch_command()
 
     target = shortcut.get("TargetPath", "")
     expanded_target = os.path.expandvars(target)
     if not target or not os.path.exists(expanded_target):
-        return False
-    if _normalize_path(target) != _normalize_path(command[0]):
-        return False
+        return "target_missing"
+    if not _paths_equivalent(target, command[0]):
+        logger.warning(
+            "开机自启快捷方式目标不匹配: shortcut=%s expected=%s",
+            target,
+            command[0],
+        )
+        return "target"
 
     expected_arguments = _format_windows_arguments(command[1:])
     if _normalize_windows_arguments(shortcut.get("Arguments", "")) != _normalize_windows_arguments(expected_arguments):
-        return False
+        logger.warning(
+            "开机自启快捷方式参数不匹配: shortcut=%s expected=%s",
+            shortcut.get("Arguments", ""),
+            expected_arguments,
+        )
+        return "arguments"
 
     working_directory = shortcut.get("WorkingDirectory", "")
-    return _normalize_path(working_directory) == _normalize_path(_get_working_directory())
+    expected_working_directory = _get_working_directory()
+    target_directory = os.path.dirname(os.path.abspath(expanded_target))
+    if working_directory and (
+        _paths_equivalent(working_directory, expected_working_directory)
+        or _paths_equivalent(working_directory, target_directory)
+    ):
+        return ""
+    if not working_directory and _is_packaged_app():
+        logger.warning("开机自启快捷方式未返回工作目录，目标和参数已匹配，按可用处理")
+        return ""
+
+    logger.warning(
+        "开机自启快捷方式工作目录不匹配: shortcut=%s expected=%s target_dir=%s",
+        working_directory,
+        expected_working_directory,
+        target_directory,
+    )
+    return "working_directory"
+
+
+def _windows_shortcut_matches(shortcut_path: str) -> bool:
+    return not _windows_shortcut_mismatch_reason(shortcut_path)
 
 
 def _read_windows_shortcut(shortcut_path: str) -> dict:
@@ -216,6 +260,7 @@ $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut({_powershell_li
   TargetPath = $shortcut.TargetPath
   Arguments = $shortcut.Arguments
   WorkingDirectory = $shortcut.WorkingDirectory
+  IconLocation = $shortcut.IconLocation
 }} | ConvertTo-Json -Compress
 """
     result = _run_powershell(script, capture_output=True)
@@ -231,6 +276,14 @@ def _configure_windows_autostart(enabled: bool) -> None:
         return
 
     os.makedirs(startup_dir, exist_ok=True)
+    if os.path.exists(shortcut_path):
+        mismatch_reason = _windows_shortcut_mismatch_reason(shortcut_path)
+        if mismatch_reason:
+            try:
+                os.remove(shortcut_path)
+            except OSError as exc:
+                logger.warning("无法移除旧的开机自启快捷方式，将尝试覆盖写入: %s", exc)
+
     command = _get_launch_command()
     target = command[0]
     arguments = _format_windows_arguments(command[1:])
@@ -250,8 +303,9 @@ $shortcut.Save()
 
     if not os.path.exists(shortcut_path):
         raise RuntimeError("设置开机自启失败：启动快捷方式未生成")
-    if not _windows_shortcut_matches(shortcut_path):
-        raise RuntimeError("设置开机自启失败：启动快捷方式内容与当前程序不匹配")
+    mismatch_reason = _windows_shortcut_mismatch_reason(shortcut_path)
+    if mismatch_reason:
+        raise RuntimeError(f"设置开机自启失败：启动快捷方式内容与当前程序不匹配（{mismatch_reason}）")
 
 
 def _get_macos_plist_path() -> str:

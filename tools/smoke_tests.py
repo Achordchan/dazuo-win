@@ -38,10 +38,10 @@ class temporary_profile:
 def check_versions():
     from src.version import APP_VERSION
 
-    assert APP_VERSION == "1.2.7", APP_VERSION
+    assert APP_VERSION == "1.2.8", APP_VERSION
     for relative in ("setup.py", "version.generated.iss", "file_version_info.txt", "src/ziyuan/changelog.md"):
         text = (REPO_ROOT / relative).read_text(encoding="utf-8")
-        assert "1.2.7" in text, relative
+        assert "1.2.8" in text, relative
 
 
 def check_first_run_template():
@@ -230,6 +230,82 @@ def check_autostart():
         assert autostart.is_autostart_enabled() is True
         autostart.configure_autostart(False)
         assert not shortcut.exists()
+
+
+def check_autostart_rebuilds_mismatched_shortcut():
+    if sys.platform != "win32":
+        return
+    from src.gongju import autostart
+
+    with temporary_profile() as root:
+        shortcut = Path(autostart._get_windows_shortcut_path())
+        shortcut.parent.mkdir(parents=True, exist_ok=True)
+        old_dir = root / "OldInstall"
+        old_dir.mkdir(parents=True)
+        old_target = old_dir / "old.exe"
+        old_target.write_bytes(b"MZ")
+        script = f"""
+$ErrorActionPreference = 'Stop'
+$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut({autostart._powershell_literal(str(shortcut))})
+$shortcut.TargetPath = {autostart._powershell_literal(str(old_target))}
+$shortcut.Arguments = '--old'
+$shortcut.WorkingDirectory = {autostart._powershell_literal(str(old_dir))}
+$shortcut.IconLocation = {autostart._powershell_literal(str(old_target))}
+$shortcut.Save()
+"""
+        autostart._run_powershell(script)
+
+        assert autostart.is_autostart_enabled() is False
+        autostart.configure_autostart(True)
+        data = autostart._read_windows_shortcut(str(shortcut))
+        command = autostart._get_launch_command()
+        assert autostart._paths_equivalent(data.get("TargetPath", ""), command[0])
+        assert autostart._normalize_windows_arguments(data.get("Arguments", "")) == autostart._normalize_windows_arguments(
+            autostart._format_windows_arguments(command[1:])
+        )
+        assert autostart.is_autostart_enabled() is True
+
+
+def check_autostart_shortcut_validation_tolerates_workdir_drift():
+    from src.gongju import autostart
+
+    original_read = autostart._read_windows_shortcut
+    original_launch = autostart._get_launch_command
+    original_workdir = autostart._get_working_directory
+    original_is_packaged = autostart._is_packaged_app
+    original_exists = autostart.os.path.exists
+    try:
+        autostart._get_launch_command = lambda: [r"C:\Program Files\Dzfyq\大佐翻译官.exe"]
+        autostart._get_working_directory = lambda: r"C:\Program Files\Dzfyq"
+        autostart._is_packaged_app = lambda: True
+        autostart.os.path.exists = lambda path: True
+        autostart._read_windows_shortcut = lambda path: {
+            "TargetPath": r"C:\Program Files\Dzfyq\大佐翻译官.exe",
+            "Arguments": "",
+            "WorkingDirectory": "",
+        }
+        assert autostart._windows_shortcut_matches("startup.lnk") is True
+
+        autostart._read_windows_shortcut = lambda path: {
+            "TargetPath": r"C:\Program Files\Dzfyq\大佐翻译官.exe",
+            "Arguments": "",
+            "WorkingDirectory": r"C:\Other",
+        }
+        assert autostart._windows_shortcut_matches("startup.lnk") is False
+        assert autostart._windows_shortcut_mismatch_reason("startup.lnk") == "working_directory"
+
+        autostart._read_windows_shortcut = lambda path: {
+            "TargetPath": r"C:\Other\大佐翻译官.exe",
+            "Arguments": "",
+            "WorkingDirectory": r"C:\Program Files\Dzfyq",
+        }
+        assert autostart._windows_shortcut_mismatch_reason("startup.lnk") == "target"
+    finally:
+        autostart._read_windows_shortcut = original_read
+        autostart._get_launch_command = original_launch
+        autostart._get_working_directory = original_workdir
+        autostart._is_packaged_app = original_is_packaged
+        autostart.os.path.exists = original_exists
 
 
 def check_autostart_unknown_does_not_save_false():
@@ -843,6 +919,8 @@ def main() -> int:
         check_update_manifest_and_script,
         check_update_prompt_waits_for_changelog_modal,
         check_autostart,
+        check_autostart_rebuilds_mismatched_shortcut,
+        check_autostart_shortcut_validation_tolerates_workdir_drift,
         check_autostart_unknown_does_not_save_false,
         check_legacy_installer_reuses_existing_install_dir,
         check_window_geometry_keeps_recoverable_screen_area,
