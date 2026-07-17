@@ -38,10 +38,10 @@ class temporary_profile:
 def check_versions():
     from src.version import APP_VERSION
 
-    assert APP_VERSION == "1.2.8", APP_VERSION
+    assert APP_VERSION == "1.2.9", APP_VERSION
     for relative in ("setup.py", "version.generated.iss", "file_version_info.txt", "src/ziyuan/changelog.md"):
         text = (REPO_ROOT / relative).read_text(encoding="utf-8")
-        assert "1.2.8" in text, relative
+        assert "1.2.9" in text, relative
 
 
 def check_first_run_template():
@@ -103,40 +103,49 @@ def check_update_manifest_and_script():
 
     with tempfile.TemporaryDirectory(prefix="dzfyq_update_smoke_") as temp:
         root = Path(temp)
-        updater = Updater()
-        updater.latest_version = APP_VERSION
+        old_home = os.environ.get("DZFYQ_HOME")
+        os.environ["DZFYQ_HOME"] = str(root / "dzfyq_home")
         try:
+            updater = Updater()
+            updater.latest_version = APP_VERSION
+            try:
+                updater._validate_update_manifest(str(root))
+                raise AssertionError("missing manifest accepted")
+            except RuntimeError:
+                pass
+            (root / "update_manifest.json").write_text(json.dumps({"app_version": "1.2.4"}), encoding="utf-8")
+            try:
+                updater._validate_update_manifest(str(root))
+                raise AssertionError("mismatched manifest accepted")
+            except RuntimeError:
+                pass
+            (root / "update_manifest.json").write_text(json.dumps({"app_version": APP_VERSION}), encoding="utf-8")
             updater._validate_update_manifest(str(root))
-            raise AssertionError("missing manifest accepted")
-        except RuntimeError:
-            pass
-        (root / "update_manifest.json").write_text(json.dumps({"app_version": "1.2.4"}), encoding="utf-8")
-        try:
-            updater._validate_update_manifest(str(root))
-            raise AssertionError("mismatched manifest accepted")
-        except RuntimeError:
-            pass
-        (root / "update_manifest.json").write_text(json.dumps({"app_version": APP_VERSION}), encoding="utf-8")
-        updater._validate_update_manifest(str(root))
 
-        script_path = root / "apply_update.ps1"
-        updater._write_apply_script(str(script_path))
-        result = subprocess.run(
-            [
-                "powershell.exe",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                f"[scriptblock]::Create((Get-Content -LiteralPath '{script_path}' -Raw -Encoding UTF8)) | Out-Null",
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-        assert result.returncode == 0, result.stderr or result.stdout
+            script_path = root / "apply_update.ps1"
+            updater._write_apply_script(str(script_path))
+            result = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    f"[scriptblock]::Create((Get-Content -LiteralPath '{script_path}' -Raw -Encoding UTF8)) | Out-Null",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            assert result.returncode == 0, result.stderr or result.stdout
+        finally:
+            if old_home is None:
+                os.environ.pop("DZFYQ_HOME", None)
+            else:
+                os.environ["DZFYQ_HOME"] = old_home
+
 
 
 def check_update_prompt_waits_for_changelog_modal():
@@ -846,7 +855,7 @@ def check_mini_window_ui():
             assert "PingFang" not in mini.output_text.styleSheet()
             assert "border: none" in mini.output_text.styleSheet()
             mini.set_output_text("hello")
-            assert mini.output_text.text() == "hello"
+            assert mini.output_text.toPlainText() == "hello"
             assert mini.surface.objectName() == "miniSurface"
             assert "border-radius: 12px" in mini.surface.styleSheet()
             assert "background: transparent" in mini.styleSheet()

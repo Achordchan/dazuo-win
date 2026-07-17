@@ -4,8 +4,9 @@ import logging
 import ctypes
 import sys
 import time
-from typing import Any, List, Optional
-from PyQt5.QtCore import QObject, QTimer, pyqtSignal
+import uuid
+from typing import Any, Dict, List, Optional
+from PyQt5.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal, QMimeData
 from PyQt5.QtWidgets import QApplication
 
 try:
@@ -32,7 +33,11 @@ def is_admin():
 
 class KuaiJieJianJianTing(QObject):
     """快捷键监听器"""
-    copy_translate_triggered = pyqtSignal()  # 信号：复制翻译触发
+    copy_translate_triggered = pyqtSignal(str)  # 信号：复制翻译触发
+
+    # Hook 回调运行在 keyboard 后台线程；Qt 剪贴板必须在 GUI 线程访问。
+    _clipboard_snapshot_request = pyqtSignal(object)
+    _clipboard_restore_request = pyqtSignal(object)
     
     def __init__(self, hotkey: str = "ctrl+c,c"):
         super().__init__()
@@ -49,6 +54,13 @@ class KuaiJieJianJianTing(QObject):
         self._is_triggering = False
         self._use_double_copy = self._hotkey == self._double_copy_hotkey
         self._is_running = False
+
+        self._clipboard_snapshot_request.connect(
+            self._handle_clipboard_snapshot_request, Qt.BlockingQueuedConnection
+        )
+        self._clipboard_restore_request.connect(
+            self._handle_clipboard_restore_request, Qt.BlockingQueuedConnection
+        )
 
     @property
     def is_running(self) -> bool:
@@ -172,36 +184,256 @@ class KuaiJieJianJianTing(QObject):
     def _on_hotkey_trigger(self):
         self._trigger_translate()
 
+    def _get_clipboard_sequence_number(self):
+        if sys.platform != "win32":
+            return None
+        try:
+            return int(ctypes.windll.user32.GetClipboardSequenceNumber())
+        except Exception:
+            return None
+
+    def _read_clipboard_text(self) -> str:
+        try:
+            return pyperclip.paste() or ""
+        except Exception:
+            return ""
+
+    def _write_clipboard_text(self, text: str) -> bool:
+        try:
+            pyperclip.copy(text or "")
+            return True
+        except Exception:
+            return False
+
+    def _mime_payload_from_clipboard(self, mime: Optional[QMimeData]) -> Dict[str, bytes]:
+        """Copy MIME formats into plain Python bytes. No QMimeData leaves this helper."""
+        payload: Dict[str, bytes] = {}
+        if mime is None:
+            return payload
+        try:
+            for fmt in mime.formats():
+                data = mime.data(fmt)
+                try:
+                    payload[str(fmt)] = bytes(data)
+                except Exception:
+                    # QByteArray may already be bytes-like on some bindings.
+                    payload[str(fmt)] = bytes(bytearray(data))
+        except Exception as error:
+            logger.debug("extract clipboard mime payload failed: %s", error)
+            return {}
+        return payload
+
+    def _mime_data_from_payload(self, payload: Optional[Dict[str, bytes]]) -> Optional[QMimeData]:
+        """Rebuild QMimeData on the GUI thread from plain Python bytes."""
+        if not payload:
+            return None
+        try:
+            mime = QMimeData()
+            for fmt, data in payload.items():
+                if not fmt:
+                    continue
+                raw = data if isinstance(data, (bytes, bytearray, memoryview)) else bytes(data)
+                mime.setData(str(fmt), bytes(raw))
+            if not mime.formats():
+                return None
+            return mime
+        except Exception as error:
+            logger.debug("rebuild clipboard mime failed: %s", error)
+            return None
+
+    def _on_gui_thread(self) -> bool:
+        app = QApplication.instance()
+        if app is None:
+            return True
+        return QThread.currentThread() is app.thread()
+
+    def _empty_clipboard_snapshot(self) -> dict:
+        return {
+            "text": "",
+            "mime_formats": {},
+            "has_mime": False,
+        }
+
+    def _snapshot_clipboard_on_gui(self) -> dict:
+        """Capture full clipboard payload as plain Python data. Must run on GUI thread."""
+        snapshot = self._empty_clipboard_snapshot()
+        snapshot["text"] = self._read_clipboard_text()
+        try:
+            clipboard = QApplication.clipboard()
+            mime = clipboard.mimeData() if clipboard is not None else None
+            payload = self._mime_payload_from_clipboard(mime)
+            if payload:
+                snapshot["mime_formats"] = payload
+                snapshot["has_mime"] = True
+        except Exception as error:
+            logger.debug("snapshot clipboard failed: %s", error)
+        return snapshot
+
+    def _restore_clipboard_snapshot_on_gui(self, snapshot: Optional[dict]) -> None:
+        """Restore full clipboard payload. Must run on the GUI thread."""
+        if not snapshot:
+            return
+        payload = snapshot.get("mime_formats")
+        # Backward-compatible: older callers may still stash a QMimeData under "mime".
+        legacy_mime = snapshot.get("mime")
+        if snapshot.get("has_mime") or payload or isinstance(legacy_mime, QMimeData):
+            try:
+                clipboard = QApplication.clipboard()
+                if isinstance(legacy_mime, QMimeData) and not payload:
+                    restore = self._mime_data_from_payload(
+                        self._mime_payload_from_clipboard(legacy_mime)
+                    )
+                else:
+                    restore = self._mime_data_from_payload(
+                        payload if isinstance(payload, dict) else None
+                    )
+                if restore is not None and clipboard is not None:
+                    clipboard.setMimeData(restore)
+                    return
+            except Exception as error:
+                logger.debug("restore clipboard mime failed: %s", error)
+        # Fallback: plain text, including empty string to clear a leftover marker.
+        self._write_clipboard_text(str(snapshot.get("text") or ""))
+
+    def _handle_clipboard_snapshot_request(self, out: list) -> None:
+        out.append(self._snapshot_clipboard_on_gui())
+
+    def _handle_clipboard_restore_request(self, snapshot: object) -> None:
+        if isinstance(snapshot, dict) or snapshot is None:
+            self._restore_clipboard_snapshot_on_gui(snapshot)
+
+    def _snapshot_clipboard(self) -> dict:
+        """Capture clipboard from the GUI thread even when called by hook threads."""
+        if self._on_gui_thread():
+            return self._snapshot_clipboard_on_gui()
+        out: List[dict] = []
+        self._clipboard_snapshot_request.emit(out)
+        if out:
+            return out[0]
+        # Fallback if the GUI thread could not service the request.
+        fallback = self._empty_clipboard_snapshot()
+        fallback["text"] = self._read_clipboard_text()
+        return fallback
+
+    def _restore_clipboard_snapshot(self, snapshot: Optional[dict]) -> None:
+        if self._on_gui_thread():
+            self._restore_clipboard_snapshot_on_gui(snapshot)
+            return
+        self._clipboard_restore_request.emit(snapshot)
+
+    def _wait_for_windows_clipboard_change(
+        self,
+        previous_seq,
+        timeout_seconds: float = 0.35,
+        poll_seconds: float = 0.02,
+    ):
+        deadline = time.monotonic() + max(timeout_seconds, 0.05)
+        last_text = ""
+        while time.monotonic() < deadline:
+            seq = self._get_clipboard_sequence_number()
+            last_text = self._read_clipboard_text()
+            if previous_seq is not None and seq is not None and seq != previous_seq and last_text.strip():
+                return last_text, seq, True
+            time.sleep(poll_seconds)
+        last_text = self._read_clipboard_text()
+        seq = self._get_clipboard_sequence_number()
+        ready = (
+            previous_seq is not None
+            and seq is not None
+            and seq != previous_seq
+            and bool(last_text.strip())
+        )
+        return last_text, seq, ready
+
+    def _wait_for_clipboard_marker_replace(
+        self,
+        marker: str,
+        timeout_seconds: float = 0.45,
+        poll_seconds: float = 0.02,
+    ):
+        """Non-Windows: prove a real copy by requiring the marker to be replaced."""
+        deadline = time.monotonic() + max(timeout_seconds, 0.05)
+        last_text = marker
+        while time.monotonic() < deadline:
+            last_text = self._read_clipboard_text()
+            if last_text.strip() and last_text != marker:
+                return last_text, True
+            time.sleep(poll_seconds)
+        last_text = self._read_clipboard_text()
+        return last_text, bool(last_text.strip() and last_text != marker)
+
     def _trigger_translate(self):
         if self._is_triggering:
             return
-        old_text = ""
+        clipboard_snapshot = None
+        marker = ""
+        used_marker = False
         self._is_triggering = True
         try:
             keyboard_module = self._require_keyboard()
-            old_text = pyperclip.paste()
-            keyboard_module.send(self._copy_sequence)
-            time.sleep(0.1)
-            new_text = pyperclip.paste()
+            previous_seq = self._get_clipboard_sequence_number()
 
-            if new_text and new_text.strip():
-                self.copy_translate_triggered.emit()
-                logger.info(f"触发复制翻译，文本长度: {len(new_text)}")
+            if previous_seq is not None:
+                # Windows: clipboard generation number is the ground truth.
+                # Do not rewrite clipboard content before the synthetic copy.
+                keyboard_module.send(self._copy_sequence)
+                new_text, new_seq, clipboard_ready = self._wait_for_windows_clipboard_change(previous_seq)
+                if not clipboard_ready:
+                    logger.info("clipboard sequence unchanged after copy; skip translate")
+                    return
+            else:
+                # Non-Windows has no sequence number. Snapshot full clipboard first,
+                # then write a one-shot marker. A successful synthetic copy must
+                # replace the marker. If copy fails, always restore the snapshot
+                # (including empty/image/file payloads) so the marker never sticks.
+                clipboard_snapshot = self._snapshot_clipboard()
+                marker = f"__DZFYQ_COPY_{uuid.uuid4().hex}__"
+                if not self._write_clipboard_text(marker):
+                    logger.info("failed to write clipboard marker; skip translate")
+                    self._restore_clipboard_snapshot(clipboard_snapshot)
+                    return
+                used_marker = True
+                keyboard_module.send(self._copy_sequence)
+                new_text, clipboard_ready = self._wait_for_clipboard_marker_replace(marker)
+                if not clipboard_ready:
+                    # Retry once for slow apps.
+                    keyboard_module.send(self._copy_sequence)
+                    new_text, clipboard_ready = self._wait_for_clipboard_marker_replace(
+                        marker,
+                        timeout_seconds=0.25,
+                    )
+                if not clipboard_ready:
+                    logger.info("clipboard marker not replaced after copy; skip translate")
+                    self._restore_clipboard_snapshot(clipboard_snapshot)
+                    return
+                new_seq = None
+
+            snapshot = new_text
+            if snapshot and snapshot.strip() and snapshot != marker:
+                self.copy_translate_triggered.emit(snapshot)
+                logger.info(
+                    "triggered copy-translate, text length=%s, seq=%s->%s, double_copy=%s, marker=%s",
+                    len(snapshot),
+                    previous_seq,
+                    new_seq if previous_seq is not None else None,
+                    self._use_double_copy,
+                    used_marker,
+                )
                 self._combination_active = True
             else:
-                logger.info("未选中文本，不触发翻译")
-                if old_text and old_text != new_text:
-                    pyperclip.copy(old_text)
+                logger.info("clipboard empty after copy; skip translate")
+                if used_marker:
+                    self._restore_clipboard_snapshot(clipboard_snapshot)
         except Exception as e:
             logger.error(f"处理复制翻译失败: {e}")
             try:
-                if old_text:
-                    pyperclip.copy(old_text)
+                if used_marker:
+                    self._restore_clipboard_snapshot(clipboard_snapshot)
             except Exception:
                 pass
         finally:
             self._is_triggering = False
-    
+
     def _on_modifier_press(self, event):
         """修饰键按下事件处理"""
         if not self._is_modifier_pressed:
@@ -302,19 +534,22 @@ class ClipboardDoubleCopyMonitor(QObject):
             if self._latest_text is not None and new_text == self._latest_text:
                 return
 
+        previous_text = self._latest_text
         try_trigger = False
         if self._last_change_time is not None:
             delta_ms = (now - self._last_change_time) * 1000
             if delta_ms <= float(self._window_ms):
                 try_trigger = True
 
+        # 仅当窗口内连续两次都写入非空文本时才触发，避免任意程序连续改剪贴板误发翻译。
         if try_trigger:
-            text = new_text or self._latest_text or ""
-            if text.strip():
+            text = (new_text or "").strip()
+            prev = (previous_text or "").strip()
+            if text and prev:
                 logger.info(f"检测到双复制（{int((now - self._last_change_time) * 1000)}ms）")
                 self.double_copy_detected.emit(text)
             else:
-                logger.info("检测到双复制，但剪贴板无文本")
+                logger.info("检测到快速剪贴板变化，但缺少有效文本，跳过翻译")
 
         self._latest_text = new_text
         self._last_change_time = now

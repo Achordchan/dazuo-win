@@ -360,27 +360,49 @@ def create_main_window() -> ZhuChuangKou:
     return ZhuChuangKou()
 
 
-def shutdown_async_resources(window: ZhuChuangKou, loop) -> None:
-    try:
+def shutdown_async_resources(window: ZhuChuangKou, loop, timeout_seconds: float = 5.0) -> None:
+    timeout_seconds = max(float(timeout_seconds), 1.0)
+    # Budget: UI/API close, then cancel remaining tasks, then async generators.
+    close_budget = min(2.5, timeout_seconds * 0.5)
+    cancel_budget = min(2.0, timeout_seconds * 0.35)
+    gens_budget = max(0.4, timeout_seconds - close_budget - cancel_budget)
+
+    async def _await_with_budget(coro, budget: float, label: str):
+        try:
+            await asyncio.wait_for(coro, timeout=budget)
+        except asyncio.TimeoutError:
+            logging.error("shutdown stage timed out: %s (budget=%.1fs)", label, budget)
+        except Exception as error:
+            logging.error("shutdown stage failed: %s: %s", label, error)
+
+    async def _close_window_resources():
         if hasattr(window, "prepare_for_shutdown"):
             window.prepare_for_shutdown()
         if hasattr(window, "close_async_resources"):
-            loop.run_until_complete(window.close_async_resources())
+            await window.close_async_resources()
 
+    async def _cancel_pending_tasks():
         try:
             all_tasks = asyncio.all_tasks(loop)
         except TypeError:
             all_tasks = asyncio.all_tasks()
-
-        pending = [task for task in all_tasks if not task.done()]
+        current = asyncio.current_task()
+        pending = [task for task in all_tasks if not task.done() and task is not current]
         for task in pending:
             task.cancel()
         if pending:
-            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            await asyncio.gather(*pending, return_exceptions=True)
 
-        loop.run_until_complete(loop.shutdown_asyncgens())
+    async def _shutdown():
+        await _await_with_budget(_close_window_resources(), close_budget, "close_async_resources")
+        await _await_with_budget(_cancel_pending_tasks(), cancel_budget, "cancel_pending_tasks")
+        await _await_with_budget(loop.shutdown_asyncgens(), gens_budget, "shutdown_asyncgens")
+
+    try:
+        loop.run_until_complete(_shutdown())
     except Exception as error:
-        logging.error(f"关闭翻译会话失败: {error}")
+        logging.error("shutdown async resources failed: %s", error)
+
 
 
 def main():

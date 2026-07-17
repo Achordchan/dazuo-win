@@ -236,6 +236,16 @@ class SearchableComboBox(QComboBox):
         popup_h = self._search_edit.sizeHint().height() + 8 + list_h + 16
 
         self._popup.setFixedSize(width, popup_h)
+        screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            x = min(max(pos.x(), geo.left()), max(geo.left(), geo.right() - width))
+            y = pos.y()
+            if y + popup_h > geo.bottom():
+                y = max(geo.top(), pos.y() - popup_h - anchor.height())
+            if y + popup_h > geo.bottom():
+                y = max(geo.top(), geo.bottom() - popup_h)
+            pos = QPoint(x, y)
         self._popup.move(pos)
         self._popup.show()
         self._search_edit.setFocus()

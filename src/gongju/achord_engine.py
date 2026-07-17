@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -24,6 +25,60 @@ DEEPLX_REPO_API = "https://api.github.com/repos/OwO-Network/DeepLX/releases/late
 ENGINE_VENDOR = "DeepLX"
 ENGINE_EXE_NAME = "deeplx.exe"
 ENGINE_PAYLOAD_NAME = f"{ENGINE_EXE_NAME}.payload"
+
+# Independent trust root for DeepLX binaries.
+# Bundled third_party manifest sha256 is always trusted; online downloads must
+# match either the bundled digest for the same version or a release allowlist.
+TRUSTED_ENGINE_DIGESTS: dict[str, str] = {}
+
+
+def _load_bundled_trust_root() -> dict[str, str]:
+    trusted: dict[str, str] = {}
+    for directory in (_bundled_engine_dir(), _dev_engine_dir()):
+        manifest_path = os.path.join(directory, "manifest.json")
+        manifest = _read_manifest(manifest_path)
+        version = str(manifest.get("version") or "").strip().lstrip("v")
+        digest = str(manifest.get("sha256") or "").strip().lower()
+        if version and digest:
+            trusted[version] = digest
+    allowlist_path = os.path.join(_project_root(), "third_party", "deeplx", "trusted_releases.json")
+    try:
+        with open(allowlist_path, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        releases = data.get("releases") if isinstance(data, dict) else None
+        if isinstance(releases, dict):
+            for version, digest in releases.items():
+                version = str(version or "").strip().lstrip("v")
+                digest = str(digest or "").strip().lower()
+                if version and re.fullmatch(r"[0-9a-f]{64}", digest):
+                    trusted[version] = digest
+    except FileNotFoundError:
+        pass
+    except Exception as error:
+        logger.warning("Failed to load DeepLX trust allowlist: %s", error)
+    return trusted
+
+
+def _expected_engine_digest(version: str) -> str:
+    global TRUSTED_ENGINE_DIGESTS
+    if not TRUSTED_ENGINE_DIGESTS:
+        TRUSTED_ENGINE_DIGESTS = _load_bundled_trust_root()
+    return TRUSTED_ENGINE_DIGESTS.get(str(version or "").strip().lstrip("v"), "")
+
+
+def _assert_trusted_engine(path: str, version: str, expected_digest: str = "") -> str:
+    digest = _sha256_file(path).lower()
+    trusted = (expected_digest or _expected_engine_digest(version) or "").lower()
+    if not trusted:
+        raise RuntimeError(
+            f"DeepLX {version} 不在可信版本清单中，请先将其加入 third_party/deeplx/trusted_releases.json。"
+        )
+    if digest != trusted:
+        raise RuntimeError("DeepLX 文件摘要与可信清单不一致，已拒绝执行。")
+    if os.path.getsize(path) > 80 * 1024 * 1024:
+        raise RuntimeError("DeepLX 文件体积过大，已拒绝执行。")
+    return digest
+
 _ENGINE_MANAGERS: "weakref.WeakSet[AchordEngineManager]" = weakref.WeakSet()
 
 
@@ -157,12 +212,17 @@ class AchordEngineLocator:
                 manifest = _read_manifest(manifest_path)
                 payload_path = os.path.join(directory, ENGINE_PAYLOAD_NAME)
                 expected_sha = str(manifest.get("sha256") or "").strip().lower()
-                if os.path.isfile(payload_path) and expected_sha:
+                version = str(manifest.get("version") or "bundled")
+                allowlist_sha = _expected_engine_digest(version)
+                if expected_sha:
                     try:
-                        if _sha256_file(executable).lower() != expected_sha:
+                        actual = _sha256_file(executable).lower()
+                        if actual != expected_sha:
                             materialized = AchordEngineLocator._materialize_payload_engine(directory)
                             if materialized:
                                 return materialized
+                        if allowlist_sha and actual != allowlist_sha:
+                            logger.warning("Bundled engine digest is not in allowlist for %s", version)
                     except Exception as error:
                         logger.warning("Failed to validate bundled engine hash: %s", error)
                 return AchordEngineInfo(
@@ -205,13 +265,20 @@ class AchordEngineLocator:
             shutil.copy2(payload_path, staging_exe)
             if not os.path.isfile(staging_exe) or os.path.getsize(staging_exe) < 1024:
                 raise RuntimeError("invalid bundled engine payload")
+            expected = str(manifest.get("sha256") or "").strip().lower()
+            actual = _sha256_file(staging_exe).lower()
+            if expected and actual != expected:
+                raise RuntimeError("bundled engine payload hash mismatch")
+            allowlist = _expected_engine_digest(version)
+            if allowlist and actual != allowlist:
+                raise RuntimeError("bundled engine payload not in trust allowlist")
 
             payload_manifest = dict(manifest)
             payload_manifest.update(
                 {
                     "name": payload_manifest.get("name") or ENGINE_VENDOR,
                     "version": version,
-                    "sha256": _sha256_file(staging_exe),
+                    "sha256": str(manifest.get("sha256") or _sha256_file(staging_exe)).strip().lower(),
                     "installed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                     "source": "bundled_payload",
                 }
@@ -253,9 +320,21 @@ class AchordEngineLocator:
             if not os.path.isdir(directory) or not os.path.isfile(executable):
                 continue
             manifest = _read_manifest(manifest_path)
+            version = str(manifest.get("version") or name)
+            expected = str(manifest.get("sha256") or "").strip().lower() or _expected_engine_digest(version)
+            try:
+                actual = _assert_trusted_engine(executable, version, expected_digest=expected)
+            except Exception as error:
+                logger.warning("Skip untrusted cached engine %s: %s", executable, error)
+                continue
+            # Prefer independent allowlist digest when available.
+            allowlist = _expected_engine_digest(version)
+            if allowlist and actual != allowlist:
+                logger.warning("Skip cache engine with non-allowlisted digest: %s", executable)
+                continue
             candidates.append(
                 AchordEngineInfo(
-                    version=str(manifest.get("version") or name),
+                    version=version,
                     executable_path=executable,
                     source="cache",
                     manifest_path=manifest_path if os.path.isfile(manifest_path) else "",
@@ -289,6 +368,7 @@ class AchordEngineManager:
 
             self.stop()
             self.engine_info = AchordEngineLocator.current_engine()
+            _assert_trusted_engine(self.engine_info.executable_path, self.engine_info.version)
             self.port = _find_free_loopback_port()
             self.token = secrets.token_urlsafe(32)
 
@@ -424,22 +504,34 @@ class AchordEngineUpdater:
                 timeout=self._timeout,
                 trust_env=True,
             ) as session:
+                expected_digest = _expected_engine_digest(safe_version)
+                if not expected_digest:
+                    raise RuntimeError(
+                        f"DeepLX {safe_version} 不在可信版本清单中，请先将其加入 third_party/deeplx/trusted_releases.json 后再下载。"
+                    )
                 async with session.get(release.download_url) as response:
                     if response.status != 200:
-                        raise RuntimeError(f"下载引擎失败: HTTP {response.status}")
+                        raise RuntimeError(f"引擎下载失败: HTTP {response.status}")
                     total = int(response.headers.get("content-length") or 0)
+                    max_bytes = 80 * 1024 * 1024
+                    if total and total > max_bytes:
+                        raise RuntimeError("DeepLX 下载体积过大")
                     downloaded = 0
                     with open(temp_exe, "wb") as file:
                         async for chunk in response.content.iter_chunked(1024 * 256):
-                            file.write(chunk)
+                            if not chunk:
+                                continue
                             downloaded += len(chunk)
+                            if downloaded > max_bytes:
+                                raise RuntimeError("DeepLX 下载体积过大")
+                            file.write(chunk)
                             if total and progress_callback:
                                 progress_callback(min(99, int(downloaded / total * 100)))
 
             if not os.path.isfile(temp_exe) or os.path.getsize(temp_exe) < 1024:
                 raise RuntimeError("下载的引擎文件无效")
 
-            digest = _sha256_file(temp_exe)
+            digest = _assert_trusted_engine(temp_exe, safe_version)
             manifest = {
                 "name": ENGINE_VENDOR,
                 "version": safe_version,

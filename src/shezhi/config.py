@@ -170,7 +170,7 @@ class Config:
             except (KeyError, TypeError):
                 return default
 
-    def set(self, key: str, value: Any) -> None:
+    def _set_in_memory(self, key: str, value: Any) -> None:
         current = self._config
         keys = key.split(".")
         for part in keys[:-1]:
@@ -178,7 +178,30 @@ class Config:
                 current[part] = {}
             current = current[part]
         current[keys[-1]] = value
-        self.save()
+
+    def set(self, key: str, value: Any, *, save: bool = True) -> bool:
+        self._set_in_memory(key, value)
+        if not save:
+            return True
+        return self.save()
+
+    def update_many(self, values: Dict[str, Any]) -> bool:
+        """Apply multiple keys then save once.
+
+        Memory is rolled back if disk write fails, so runtime config does not
+        silently diverge from the last successfully saved file.
+        """
+        previous = copy.deepcopy(self._config)
+        try:
+            for key, value in (values or {}).items():
+                self._set_in_memory(key, value)
+            if self.save():
+                return True
+            self._config = previous
+            return False
+        except Exception:
+            self._config = previous
+            return False
 
     def load(self) -> None:
         previous = copy.deepcopy(self._config)
@@ -193,7 +216,7 @@ class Config:
         if migrated or validated or not os.path.exists(self.config_file):
             self._save_if_changed(previous)
 
-    def save(self) -> None:
+    def save(self) -> bool:
         temp_path = ""
         try:
             self._ensure_config_dir()
@@ -207,6 +230,7 @@ class Config:
                 json.dump(self._config, file, ensure_ascii=False, indent=4)
                 file.write("\n")
             os.replace(temp_path, self.config_file)
+            return True
         except Exception as error:
             if temp_path:
                 try:
@@ -215,6 +239,7 @@ class Config:
                 except OSError:
                     pass
             print(f"保存配置文件失败: {error}")
+            return False
 
     def reset(self) -> None:
         self._config = build_default_config()

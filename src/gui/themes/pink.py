@@ -15,7 +15,6 @@ QTextEdit {
     border-radius: 8px;
     padding: 12px 16px;
     font-size: 16px;
-    line-height: 1.8;
     color: #333333;
     font-family: "SimHei";
     selection-background-color: #FF69B4;
@@ -31,7 +30,6 @@ QTextEdit[readOnly="true"] {
     font-family: "SimHei";
     color: #333333;
     font-size: 16px;
-    line-height: 1.8;
 }
 
 QPushButton {
@@ -291,7 +289,6 @@ QTextBrowser#changelogBrowser {
     padding: 10px;
     color: #333333;
     font-size: 14px;
-    line-height: 1.6;
 }
 
 QPushButton#changelogOk {

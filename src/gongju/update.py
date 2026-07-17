@@ -11,12 +11,26 @@ import time
 import zipfile
 from PyQt5.QtCore import QObject, pyqtSignal
 from src.version import APP_VERSION
+from src.gongju.update_trust import (
+    extract_signature_from_release_notes,
+    infer_package_identity,
+    load_manifest_from_dir,
+    normalize_platform,
+    normalize_version,
+    sha256_file,
+    strip_signature_markers_from_notes,
+    verify_package_authenticity,
+)
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class Updater(QObject):
+    MAX_UPDATE_PACKAGE_BYTES = 400 * 1024 * 1024
+    MAX_ZIP_MEMBERS = 20000
+    MAX_ZIP_UNCOMPRESSED_BYTES = 800 * 1024 * 1024
+    MAX_ZIP_COMPRESSION_RATIO = 100.0
     # 定义信号
     update_available = pyqtSignal(str, str, bool)  # 版本号, 更新说明, 是否强制更新
     update_progress = pyqtSignal(int)  # 下载进度
@@ -32,9 +46,14 @@ class Updater(QObject):
         self.force_update = False
         self.asset_suffix = None
         self.latest_version = None
-        self._download_dir = os.path.join(os.path.expanduser("~/.dzfyq"), "update_cache")
-        self._backup_root = os.path.join(os.path.expanduser("~/.dzfyq"), "update_backup")
-        self._state_dir = os.path.join(os.path.expanduser("~/.dzfyq"), "update_state")
+        self.release_signature = None
+        self.expected_asset_name = None
+        self.expected_package_sha256 = None
+        self.expected_package_size = None
+        cache_root = os.environ.get("DZFYQ_HOME") or os.path.expanduser("~/.dzfyq")
+        self._download_dir = os.path.join(cache_root, "update_cache")
+        self._backup_root = os.path.join(cache_root, "update_backup")
+        self._state_dir = os.path.join(cache_root, "update_state")
         self._cleanup_download_cache()
 
     def _ensure_download_dir(self) -> None:
@@ -144,14 +163,31 @@ class Updater(QObject):
     def _safe_extract_zip(self, zip_path: str, extract_dir: str) -> None:
         extract_root = os.path.abspath(extract_dir)
         with zipfile.ZipFile(zip_path, "r") as archive:
-            for member in archive.infolist():
+            members = archive.infolist()
+            if len(members) > self.MAX_ZIP_MEMBERS:
+                raise RuntimeError(f"更新包文件数过多，已终止更新：{len(members)}")
+
+            total_uncompressed = 0
+            for member in members:
+                if member.is_dir():
+                    continue
+                total_uncompressed += int(member.file_size or 0)
+                if total_uncompressed > self.MAX_ZIP_UNCOMPRESSED_BYTES:
+                    raise RuntimeError("更新包解压后体积过大，已终止更新。")
+                compressed = max(int(member.compress_size or 0), 1)
+                ratio = float(member.file_size or 0) / float(compressed)
+                if ratio > self.MAX_ZIP_COMPRESSION_RATIO and (member.file_size or 0) > 1024 * 1024:
+                    raise RuntimeError("更新包压缩比异常，已终止更新。")
+
                 member_target = os.path.abspath(os.path.join(extract_root, member.filename))
                 try:
                     if os.path.commonpath([extract_root, member_target]) != extract_root:
                         raise RuntimeError("更新包包含非法路径，已终止更新。")
                 except ValueError as error:
                     raise RuntimeError("更新包包含非法路径，已终止更新。") from error
-            archive.extractall(extract_root)
+
+            for member in members:
+                archive.extract(member, extract_root)
 
     def _validate_update_source_dir(self, source_dir: str, exe_name: str) -> tuple[str, str]:
         exe_path = os.path.join(source_dir, exe_name)
@@ -174,17 +210,34 @@ class Updater(QObject):
             raise RuntimeError("更新包版本清单损坏，已终止更新。") from error
         return str(manifest.get("app_version") or "").strip()
 
+    def _current_update_platform(self) -> str:
+        if sys.platform == "darwin":
+            return "macos"
+        if sys.platform == "win32":
+            return "windows"
+        return normalize_platform(sys.platform)
+
+    def _package_identity_for_path(self, file_path: str, filename: str = "") -> tuple[str, str]:
+        name = filename or self.expected_asset_name or os.path.basename(file_path)
+        return infer_package_identity(name)
+
     def _validate_update_manifest(self, source_dir: str) -> None:
-        expected_version = (self.latest_version or "").strip()
+        expected_version = normalize_version(self.latest_version or "")
         if not expected_version:
             return
-        package_version = self._read_update_manifest_version(source_dir)
+        manifest = load_manifest_from_dir(source_dir)
+        package_version = normalize_version(str(manifest.get("app_version") or ""))
         if not package_version:
             raise RuntimeError("更新包缺少版本清单，已终止更新。")
         if self._compare_versions(package_version, expected_version) != 0:
             raise RuntimeError(
                 f"更新包版本不匹配：期望 v{expected_version}，实际 v{package_version}。"
             )
+        # Prefer package-level authenticity verification performed before extract.
+        # Still require package_type when present.
+        package_type = str(manifest.get("package_type") or "").strip()
+        if package_type and package_type not in {"windows_full_update"}:
+            raise RuntimeError(f"更新包类型不受支持：{package_type}")
 
     def _find_update_source_dir(self, extract_dir: str, exe_name: str) -> tuple[str, str]:
         candidates = [exe_name, "大佐翻译官.exe"]
@@ -210,7 +263,39 @@ class Updater(QObject):
 
         raise RuntimeError("更新包内未找到主程序，请确认上传的是完整运行目录 zip。")
 
+    def _verify_downloaded_package(self, file_path: str) -> None:
+        size = os.path.getsize(file_path)
+        if size <= 0:
+            raise RuntimeError("更新包为空，已终止更新。")
+        if size > self.MAX_UPDATE_PACKAGE_BYTES:
+            raise RuntimeError("更新包体积过大，已终止更新。")
+        if self.expected_package_size and int(self.expected_package_size) != size:
+            raise RuntimeError("更新包大小与发布信息不一致，已终止更新。")
+
+        actual_sha = sha256_file(file_path, max_bytes=self.MAX_UPDATE_PACKAGE_BYTES)
+        if self.expected_package_sha256 and actual_sha != str(self.expected_package_sha256).lower():
+            raise RuntimeError("更新包校验值与发布信息不一致，已终止更新。")
+
+        signature = (self.release_signature or "").strip()
+        if not signature:
+            raise RuntimeError("更新包缺少有效签名，已终止更新。")
+
+        expected_filename = self.expected_asset_name or os.path.basename(file_path)
+        package_type, platform = self._package_identity_for_path(file_path, expected_filename)
+        verify_package_authenticity(
+            package_path=file_path,
+            expected_version=self.latest_version or "",
+            signature_b64=signature,
+            expected_filename=expected_filename,
+            package_type=package_type,
+            platform=platform,
+            max_bytes=self.MAX_UPDATE_PACKAGE_BYTES,
+        )
+        self.expected_package_sha256 = actual_sha
+        self.expected_package_size = size
+
     def _prepare_full_update_source(self, file_path: str) -> tuple[str, str]:
+        self._verify_downloaded_package(file_path)
         if not zipfile.is_zipfile(file_path):
             raise RuntimeError("更新包不是有效的 zip 文件。")
 
@@ -425,19 +510,36 @@ try {
 }
 catch {
     Write-UpdateLog "Update failed: $($_.Exception.Message)"
+    $restoreSucceeded = $false
     try {
         if ($backupCompleted -and (Test-Path -LiteralPath $BackupDir -PathType Container)) {
             Invoke-RobocopyChecked -From $BackupDir -To $TargetDir -Phase "restore" -Mirror
+            $targetExeAfter = Join-Path $TargetDir $ExeName
+            if (-not (Test-Path -LiteralPath $targetExeAfter -PathType Leaf)) {
+                throw "Restored executable not found: $targetExeAfter"
+            }
             Write-UpdateLog "Restore completed."
+            $restoreSucceeded = $true
         }
         else {
             Write-UpdateLog "Backup did not complete; target directory was left unchanged."
+            $targetExeAfter = Join-Path $TargetDir $ExeName
+            if ((Test-Path -LiteralPath $targetExeAfter -PathType Leaf) -and (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) -eq $null) {
+                # Target never modified; safe to restart original.
+                $restoreSucceeded = $true
+            }
         }
     }
     catch {
         Write-UpdateLog "Restore failed: $($_.Exception.Message)"
+        $restoreSucceeded = $false
     }
-    Start-TargetAppIfStopped -Reason "after update failure"
+    if ($restoreSucceeded) {
+        Start-TargetAppIfStopped -Reason "after update failure with successful restore"
+    }
+    else {
+        Write-UpdateLog "Skip restart after update failure because restore did not fully succeed."
+    }
     Write-UpdateResult -Status "failed" -Message $_.Exception.Message
     Remove-Item -LiteralPath $PendingPath -Force -ErrorAction SilentlyContinue
     exit 1
@@ -536,6 +638,10 @@ catch {
             self.update_url = None
             self.asset_suffix = None
             self.latest_version = None
+            self.release_signature = None
+            self.expected_asset_name = None
+            self.expected_package_sha256 = None
+            self.expected_package_size = None
             logger.info("开始检查更新...")
             async with aiohttp.ClientSession() as session:
                 logger.info(f"正在请求 Gitee API: {self.gitee_api}")
@@ -576,8 +682,19 @@ catch {
                         # 检查是否强制更新
                         marker = "update=1"
                         self.force_update = marker in self.release_notes
-                        # 移除强制更新标记
+                        current_platform = self._current_update_platform()
+                        self.release_signature = extract_signature_from_release_notes(
+                            self.release_notes,
+                            platform=current_platform,
+                        )
+                        if not self.release_signature:
+                            raise RuntimeError(
+                                f"Release 说明缺少 {current_platform} 平台签名标记 "
+                                f"(DZFYQ-SIG-{current_platform.upper()}:...)"
+                            )
+                        # 移除强制更新标记与签名标记，避免展示在更新说明中
                         clean_notes = self.release_notes.replace(marker, "").strip()
+                        clean_notes = strip_signature_markers_from_notes(clean_notes)
                         logger.info(f"是否强制更新: {self.force_update}")
                         
                         # 获取下载链接
@@ -600,6 +717,8 @@ catch {
                             if asset_matched:
                                 self.update_url = asset.get('browser_download_url')
                                 self.asset_suffix = os.path.splitext(asset_name)[1]
+                                self.expected_asset_name = asset.get('name') or asset_name
+                                self.expected_package_size = asset.get('size')
                                 if self.update_url:
                                     logger.info(f"找到更新包下载链接: {self.update_url}")
                                     break
@@ -657,20 +776,27 @@ catch {
                         return
 
                     # 获取文件大小
-                    total_size = int(response.headers.get('content-length', 0))
-                    
-                    # 下载文件
+                    total_size = int(response.headers.get('content-length', 0) or 0)
+                    if total_size and total_size > self.MAX_UPDATE_PACKAGE_BYTES:
+                        raise RuntimeError("更新包体积过大，已终止更新。")
+                    if self.expected_package_size and total_size and int(self.expected_package_size) != total_size:
+                        raise RuntimeError("更新包大小与发布信息不一致，已终止更新。")
+
                     with open(temp_path, 'wb') as f:
                         downloaded = 0
                         async for chunk in response.content.iter_chunked(8192):
-                            f.write(chunk)
+                            if not chunk:
+                                continue
                             downloaded += len(chunk)
-                            # 更新进度
+                            if downloaded > self.MAX_UPDATE_PACKAGE_BYTES:
+                                raise RuntimeError("更新包体积过大，已终止更新。")
+                            f.write(chunk)
                             if total_size:
                                 progress = int((downloaded / total_size) * 100)
                                 self.update_progress.emit(progress)
 
             logger.info(f"更新文件下载完成: {temp_path}")
+            self._verify_downloaded_package(temp_path)
             self.update_complete.emit(temp_path)
             
         except Exception as e:

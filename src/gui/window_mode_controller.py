@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 class WindowModeController:
     def __init__(self, main_window):
         self.main_window = main_window
+        self._mini_request_token = 0
 
     def ensure_mini_window(self):
         if not getattr(self.main_window, "mini_window", None):
@@ -77,13 +78,13 @@ class WindowModeController:
         activate()
         QTimer.singleShot(80, activate)
 
-    def handle_copy_translate(self):
+    def handle_copy_translate(self, text: str = ""):
         now = time.monotonic()
         if now - getattr(self.main_window, "_last_copy_trigger_time", 0.0) < 0.35:
             return
         self.main_window._last_copy_trigger_time = now
 
-        text = pyperclip.paste().strip()
+        text = (text or "").strip() or pyperclip.paste().strip()
         if not text:
             self.main_window.tishi.showMessage("剪贴板为空", type="warning")
             return
@@ -135,6 +136,8 @@ class WindowModeController:
         self.main_window.translator_vm.translate_now(text, self.main_window._get_vm_context())
 
     async def translate_and_show_mini(self, text_to_translate, service=None, api_name=None, api_generation=None):
+        self._mini_request_token += 1
+        request_token = self._mini_request_token
         try:
             mini_window = self.ensure_mini_window()
             mini_window.resize(mini_window.DEFAULT_WIDTH, mini_window.DEFAULT_HEIGHT)
@@ -155,18 +158,24 @@ class WindowModeController:
                 expected_api_generation=api_generation,
             )
 
+            if request_token != self._mini_request_token:
+                return
             translation_text = translation_result[0] if isinstance(translation_result, tuple) else translation_result
             if not translation_text:
                 mini_window.stop_loading()
                 mini_window.set_output_text("翻译失败，请重试")
                 return
 
+            if request_token != self._mini_request_token:
+                return
             mini_window.stop_loading()
             mini_window.set_output_text(translation_text)
             mini_window._adjust_window_size_for_text(translation_text)
-            logger.info(f"Mini窗口已显示翻译结果: '{text_to_translate[:20]}...' -> '{translation_text[:20]}...'")
+            logger.info("Mini window showed translation result (len_in=%s, len_out=%s)", len(text_to_translate or ""), len(translation_text or ""))
         except Exception as error:
             logger.error(f"Mini窗口翻译失败: {error}")
+            if request_token != self._mini_request_token:
+                return
             if getattr(self.main_window, "mini_window", None):
                 self.main_window.mini_window.stop_loading()
                 self.main_window.mini_window.set_output_text(f"翻译失败: {error}")

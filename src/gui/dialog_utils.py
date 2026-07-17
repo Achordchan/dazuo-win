@@ -234,6 +234,7 @@ def show_themed_message(
     box = QMessageBox(owner)
     box.setWindowTitle(title)
     box.setIcon(icon)
+    box.setTextFormat(Qt.PlainText)
     box.setText(text)
     if informative_text:
         box.setInformativeText(informative_text)

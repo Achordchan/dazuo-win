@@ -1,6 +1,6 @@
 import os
 
-from PyQt5.QtWidgets import QWidget, QHBoxLayout, QLabel, QPushButton, QDialog, QVBoxLayout, QFrame
+from PyQt5.QtWidgets import QScrollArea, QWidget, QHBoxLayout, QLabel, QPushButton, QDialog, QVBoxLayout, QFrame
 from PyQt5.QtWidgets import QGraphicsDropShadowEffect
 from PyQt5.QtCore import Qt, QSize, QUrl
 from PyQt5.QtGui import QDesktopServices, QIcon, QPixmap, QPainter, QPainterPath, QColor
@@ -17,13 +17,22 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self._parent = parent
         self.setWindowTitle("关于")
-        self.setFixedSize(620, 680)
+        self.setMinimumSize(520, 360)
+        self.resize(620, 680)
+        self.setMaximumSize(720, 900)
         self.setObjectName("aboutDialog")
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(0)
+
+        scroll = QScrollArea(self)
+        scroll.setObjectName("aboutScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
         card = QFrame()
         card.setObjectName("aboutCard")
@@ -120,7 +129,8 @@ class AboutDialog(QDialog):
         actions_layout.addWidget(close_button)
         card_layout.addLayout(actions_layout)
 
-        layout.addWidget(card)
+        scroll.setWidget(card)
+        layout.addWidget(scroll)
         self._apply_style()
         self._disable_context_menus()
         self._load_avatar(resource_path("头像.jpg"))
@@ -201,6 +211,8 @@ class AboutDialog(QDialog):
         link_hover = palette.secondary_hover
         self.setStyleSheet(
             f"#aboutDialog {{ background: {palette.background}; }}"
+            f"#aboutScroll {{ background: transparent; border: none; }}"
+            f"#aboutScroll > QWidget > QWidget {{ background: transparent; }}"
             f"#aboutCard {{ background: {palette.surface}; border: 1px solid {palette.border}; border-radius: 16px; }}"
             f"#aboutAvatar {{ background: {soft_primary}; border-radius: 38px; border: 1px solid {soft_border}; }}"
             f"#aboutTitle {{ color: {palette.text}; font-size: 24px; font-weight: 700; padding: 0; }}"
@@ -403,6 +415,10 @@ class BiaoTiLan(QWidget):
     def mousePressEvent(self, event):
         """标按下事件"""
         if event.button() == Qt.LeftButton:
+            # Keep a few pixels at the top for window edge resize hot zone.
+            if event.pos().y() <= 4:
+                event.ignore()
+                return
             self.parent._drag_start_pos = event.globalPos() - self.parent.pos()
             _window_geometry.begin_move(self.parent)
             self.parent._is_dragging = True

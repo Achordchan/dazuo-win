@@ -35,3 +35,6 @@ Thumbs.db
 .pytest_cache/
 .mypy_cache/
 .pyright/
+
+# update signing private key
+tools/signing/update_ed25519_private.pem

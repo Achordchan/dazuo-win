@@ -25,7 +25,7 @@ def sanitize_error_message(error, secrets: Iterable[str] = ()) -> str:
 
     for secret in secrets or ():
         secret = (secret or "").strip()
-        if len(secret) >= 6:
+        if len(secret) >= 4:
             message = message.replace(secret, "[已隐藏]")
 
     for pattern in _SECRET_PATTERNS:

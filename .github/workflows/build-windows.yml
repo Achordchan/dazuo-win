@@ -1,0 +1,91 @@
+name: Build Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without the v prefix
+        required: true
+        default: 1.2.9
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install nuitka ordered-set zstandard
+
+      - name: Validate version
+        shell: pwsh
+        run: |
+          python tools/sync_version.py
+          $version = python -c "from src.version import APP_VERSION; print(APP_VERSION)"
+          if ($version.Trim() -ne '${{ inputs.version }}') {
+            throw "Workflow version ${{ inputs.version }} does not match source version $version"
+          }
+
+      - name: Source checks
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          DZFYQ_SKIP_PACKAGE_CHECK: '1'
+        run: |
+          python -m compileall -q src tools setup.py
+          python tools/smoke_tests.py
+
+      - name: Build standalone application
+        shell: pwsh
+        run: |
+          $version = '${{ inputs.version }}'
+          python -m nuitka `
+            --standalone `
+            --windows-console-mode=disable `
+            --windows-file-version=$version `
+            --windows-product-version=$version `
+            --windows-company-name="大佐软件" `
+            --windows-product-name="大佐翻译官" `
+            --windows-file-description="大佐翻译官" `
+            --mingw64 `
+            --assume-yes-for-downloads `
+            --output-dir=dist_nuitka `
+            --output-filename="大佐翻译官.exe" `
+            --windows-icon-from-ico=src/ziyuan/logo.ico `
+            --enable-plugin=pyqt5 `
+            --include-package-data=qtawesome `
+            --include-qt-plugins=platforms,imageformats,styles `
+            --include-data-dir=src/ziyuan=src/ziyuan `
+            --include-data-dir=src/config=src/config `
+            --include-data-files=third_party/deeplx/windows/amd64/deeplx.exe=engines/deeplx/windows/amd64/deeplx.exe `
+            --include-data-dir=third_party/deeplx=engines/deeplx `
+            src/main.py
+
+      - name: Create and verify unsigned update package
+        shell: pwsh
+        run: |
+          $version = '${{ inputs.version }}'
+          $zip = "output/dazuofanyiguan_full.for.windows_$version.zip"
+          python tools/write_update_manifest.py dist_nuitka/main.dist
+          python tools/create_windows_update_package.py dist_nuitka/main.dist $zip
+          python -c "from pathlib import Path; from tools.verify_windows_package import verify_package; import sys; verify_package(Path(sys.argv[1]), sys.argv[2])" $zip $version
+
+      - name: Upload unsigned build artifact
+        uses: actions/upload-artifact@v4

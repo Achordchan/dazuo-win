@@ -156,27 +156,29 @@ class ShuChuKuang(QTextEdit):
     def _on_copy(self):
         """复制按钮点击事件"""
         text = self.toPlainText()
-        if text:
-            try:
-                pyperclip.copy(text)
-                # 获取主窗口对象
-                main_window = None
-                parent = self.parent()
-                while parent is not None:
-                    if parent.__class__.__name__ == "ZhuChuangKou":
-                        main_window = parent
-                        break
-                    parent = parent.parent()
-                
-                if main_window and hasattr(main_window, 'tishi'):
-                    main_window.tishi.showMessage("复制成功", type='success')
-                else:
-                    print("复制成功")
-            except Exception as e:
-                if main_window and hasattr(main_window, 'tishi'):
-                    main_window.tishi.showMessage("复制失败", type='error')
-                else:
-                    print("复制失败")
+        if not text:
+            return
+
+        main_window = None
+        parent = self.parent()
+        while parent is not None:
+            if parent.__class__.__name__ == "ZhuChuangKou":
+                main_window = parent
+                break
+            parent = parent.parent()
+
+        try:
+            pyperclip.copy(text)
+            if main_window and hasattr(main_window, "tishi"):
+                main_window.tishi.showMessage("复制成功", type="success")
+            else:
+                print("复制成功")
+        except Exception:
+            if main_window and hasattr(main_window, "tishi"):
+                main_window.tishi.showMessage("复制失败", type="error")
+            else:
+                print("复制失败")
+
 
     def set_ai_info(self, model, duration_ms, estimated_tokens):
         self._ai_info_model = model

@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QHBoxLayout, QApplication, QLabel, QFrame
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QHBoxLayout, QApplication, QLabel, QFrame, QTextBrowser
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QEvent
 from PyQt5.QtGui import QCursor, QFont
 import logging
@@ -157,10 +157,15 @@ class MiniChuangKou(QWidget):
 
             main_layout.addWidget(title_bar)
 
-            self.output_text = QLabel("翻译结果将显示在这里...")
+            self.output_text = QTextBrowser()
             self.output_text.setObjectName("miniOutputText")
-            self.output_text.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            self.output_text.setWordWrap(True)
+            self.output_text.setReadOnly(True)
+            self.output_text.setOpenExternalLinks(False)
+            self.output_text.setOpenLinks(False)
+            self.output_text.setFrameShape(QFrame.NoFrame)
+            self.output_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.output_text.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self.output_text.setLineWrapMode(QTextBrowser.WidgetWidth)
             self.output_text.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
             self._apply_output_font()
             self.output_text.setMinimumHeight(44)
@@ -234,10 +239,9 @@ class MiniChuangKou(QWidget):
                     background-color: {theme["button_pressed"]};
                 }}
             """)
-            
-        # output_text 当前是 QLabel
+
         text_style = f"""
-            QLabel#miniOutputText {{
+            QTextBrowser#miniOutputText {{
                 background-color: transparent;
                 color: {theme["text_color"]};
                 border: none;
@@ -245,6 +249,24 @@ class MiniChuangKou(QWidget):
                 font-size: {self.OUTPUT_FONT_SIZE}px;
                 font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
                 line-height: 1.45;
+            }}
+            QTextBrowser#miniOutputText QScrollBar:vertical {{
+                background: {theme.get("scrollbar_background", theme["background_color"])};
+                width: 8px;
+                margin: 2px;
+                border-radius: 4px;
+            }}
+            QTextBrowser#miniOutputText QScrollBar::handle:vertical {{
+                background: {theme.get("scrollbar_handle", theme["border_color"])};
+                min-height: 24px;
+                border-radius: 4px;
+            }}
+            QTextBrowser#miniOutputText QScrollBar::handle:vertical:hover {{
+                background: {theme.get("scrollbar_handle_hover", theme["hover_border_color"])};
+            }}
+            QTextBrowser#miniOutputText QScrollBar::add-line:vertical,
+            QTextBrowser#miniOutputText QScrollBar::sub-line:vertical {{
+                height: 0px;
             }}
         """
         self.output_text.setStyleSheet(text_style)
@@ -444,7 +466,7 @@ class MiniChuangKou(QWidget):
             self.output_text.clear()
             
             # 计算窗口位置，确保在屏幕内
-            screen = QApplication.primaryScreen()
+            screen = QApplication.screenAt(cursor_pos) or QApplication.primaryScreen()
             screen_rect = screen.availableGeometry()
             
             # 窗口尺寸
@@ -739,51 +761,44 @@ class MiniChuangKou(QWidget):
         """根据文本内容自动调整窗口大小"""
         try:
             if not text:
-                # 空文本使用默认尺寸
                 self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
                 return
-            
-            # 计算所需高度
+
             font_metrics = self.output_text.fontMetrics()
-            text_width = self.output_text.width() - 20  # 减去边距
-            
-            # 计算文本在给定宽度下需要多少行
-            text_lines = []
-            for line in text.split('\n'):
-                # 处理长行自动换行
-                while font_metrics.horizontalAdvance(line) > text_width:
-                    # 找到适合当前宽度的截断点
-                    i = len(line)
-                    while i > 0 and font_metrics.horizontalAdvance(line[:i]) > text_width:
-                        i -= 1
-                    
-                    if i == 0:  # 单个字符宽度超过文本框宽度
-                        i = 1
-                    
-                    text_lines.append(line[:i])
-                    line = line[i:]
-                
-                if line:  # 添加剩余的行
-                    text_lines.append(line)
-            
-            # 计算所需高度 (行数 * 行高 + 额外空间)
-            line_count = len(text_lines)
+            text_width = max(40, self.output_text.width() - 20)
+            # O(n) line wrapping estimate via horizontalAdvance buckets.
+            line_count = 0
+            for raw_line in str(text).split("\n"):
+                if not raw_line:
+                    line_count += 1
+                    continue
+                advance = font_metrics.horizontalAdvance(raw_line)
+                if advance <= text_width:
+                    line_count += 1
+                else:
+                    # Approximate wrapped lines without O(n^2) binary search per char.
+                    avg_char = max(font_metrics.averageCharWidth(), 1)
+                    chars_per_line = max(int(text_width / avg_char), 1)
+                    line_count += max(1, (len(raw_line) + chars_per_line - 1) // chars_per_line)
+
             line_height = font_metrics.lineSpacing()
-            
             toolbar_height = 28
             content_height = line_count * line_height + 28 + toolbar_height
-            
-            # 限制最大高度，避免窗口过大
             max_height = 400
             content_height = min(content_height, max_height)
-            
-            # 调整窗口大小
             self.resize(self.DEFAULT_WIDTH, max(self.MIN_HEIGHT, content_height))
-            logger.info(f"调整窗口大小为: {self.DEFAULT_WIDTH}x{content_height}, 文本行数: {line_count}")
+            if hasattr(self.output_text, "setVerticalScrollBarPolicy"):
+                self.output_text.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            logger.info(
+                "resize mini window to %sx%s, approx lines=%s",
+                self.DEFAULT_WIDTH,
+                content_height,
+                line_count,
+            )
         except Exception as e:
             logger.error(f"调整窗口大小失败: {e}")
-            # 出错时使用默认大小
             self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
+
 
     def _get_theme_colors(self):
         """获取当前主题颜色"""

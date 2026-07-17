@@ -1,4 +1,5 @@
 import asyncio
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -38,6 +39,11 @@ class TranslatorViewModel(QObject):
         self._context: Optional[TranslationContext] = None
 
         self._debounce_ms = 380
+        # Free local engines (DeepLX/Achord) are easy to hammer while typing.
+        self._achord_debounce_ms = 900
+        # After HTTP 429, hold new auto-translations for this many seconds.
+        self._rate_limit_cooldown_s = 60.0
+        self._rate_limit_until = 0.0
 
         self._translation_task: Optional[asyncio.Task] = None
         self._token_counter = 0
@@ -51,6 +57,7 @@ class TranslatorViewModel(QObject):
         self._last_ai_model_name: Optional[str] = None
         self._last_ai_estimated_tokens: Optional[int] = None
         self._last_translation_duration_ms: Optional[int] = None
+        self._newline_token: str = ""
 
     def get_last_ai_info(self):
         return self._last_ai_model_name, self._last_translation_duration_ms, self._last_ai_estimated_tokens
@@ -64,13 +71,18 @@ class TranslatorViewModel(QObject):
             self.cancel(clear_output=True)
             return
 
-        self._debounce_timer.start(self._debounce_ms)
+        self._debounce_timer.start(self._effective_debounce_ms())
 
     def translate_now(self, text: str, context: TranslationContext) -> None:
         text = text or ""
         self._input_text = text
         self._context = context
         self._debounce_timer.stop()
+        # Never bypass cooldown. Immediate UI actions still wait out rate limits.
+        remaining_ms = int(self._api_rate_limit_remaining_s() * 1000)
+        if remaining_ms > 0:
+            self._debounce_timer.start(remaining_ms)
+            return
         self._start_translate_task()
 
     def cancel(self, clear_output: bool) -> None:
@@ -127,7 +139,52 @@ class TranslatorViewModel(QObject):
             except Exception:
                 pass
 
+    def _api_rate_limit_remaining_s(self) -> float:
+        api = getattr(self._fanyi, "_fanyi_jiekou", None)
+        remaining = 0.0
+        getter = getattr(api, "rate_limit_remaining_s", None)
+        if callable(getter):
+            try:
+                remaining = float(getter() or 0.0)
+            except Exception:
+                remaining = 0.0
+        return max(0.0, remaining, float(self._rate_limit_until) - time.monotonic())
+
+    def _effective_debounce_ms(self) -> int:
+        delay = int(self._debounce_ms)
+        if self._context is not None and self._context.api_name == "achord_builtin":
+            delay = max(delay, int(self._achord_debounce_ms))
+        remaining_ms = int(self._api_rate_limit_remaining_s() * 1000)
+        return max(delay, remaining_ms)
+
+    def _is_rate_limit_error(self, error: Exception) -> bool:
+        status_code = getattr(error, "status_code", None) or getattr(error, "status", None)
+        if status_code == 429:
+            return True
+        msg = str(error or "")
+        lowered = msg.lower()
+        return (
+            " 429" in msg
+            or "HTTP 429" in msg
+            or "http 429" in lowered
+            or "too many requests" in lowered
+            or "rate limit" in lowered
+            or "ratelimit" in lowered
+        )
+
+    def _note_rate_limited(self, cooldown_s: Optional[float] = None) -> float:
+        wait_s = float(self._rate_limit_cooldown_s if cooldown_s is None else cooldown_s)
+        wait_s = max(1.0, wait_s)
+        self._rate_limit_until = max(self._rate_limit_until, time.monotonic() + wait_s)
+        return wait_s
+
     def _on_debounce_timeout(self) -> None:
+        # If we are still inside a 429 cooldown window, keep waiting instead of
+        # firing another request the moment the original debounce expires.
+        remaining_ms = int(self._api_rate_limit_remaining_s() * 1000)
+        if remaining_ms > 0:
+            self._debounce_timer.start(remaining_ms)
+            return
         self._start_translate_task()
 
     def _start_translate_task(self) -> None:
@@ -176,11 +233,16 @@ class TranslatorViewModel(QObject):
     def _normalize_newlines(self, text: str) -> str:
         return text.replace("\r\n", "\n").replace("\r", "\n")
 
+    def _make_newline_token(self) -> str:
+        return f"[[DZFYQ_NL_{secrets.token_hex(8)}]]"
+
     def _replace_newlines(self, text: str) -> str:
-        return self._normalize_newlines(text).replace("\n", " [[DAZUO_NL]] ")
+        self._newline_token = self._make_newline_token()
+        return self._normalize_newlines(text).replace("\n", f" {self._newline_token} ")
 
     def _restore_newlines(self, text: str) -> str:
-        return text.replace(" [[DAZUO_NL]] ", "\n").replace("[[DAZUO_NL]]", "\n")
+        token = self._newline_token or "[[DZFYQ_NL]]"
+        return text.replace(f" {token} ", "\n").replace(token, "\n")
 
     async def _translate_task(self, token: int) -> None:
         ctx = self._context
@@ -277,28 +339,37 @@ class TranslatorViewModel(QObject):
         try:
             return await once()
         except Exception as e:
-            if not is_ai:
+            if not self._is_rate_limit_error(e):
                 raise
 
-            status_code = getattr(e, "status_code", None) or getattr(e, "status", None)
-            msg = str(e)
-            is_429 = status_code == 429 or " 429" in msg or "HTTP 429" in msg
-            if not is_429:
+            # Builtin DeepLX/IP bans are enforced inside AchordBuiltinAPI. Do not
+            # auto-retry here; automatic retries can prolong the ban. Other free
+            # endpoints also fail closed after noting a short local cooldown.
+            if api_name == "achord_builtin" or not is_ai:
+                # Prefer the API-layer remaining window when present.
+                wait_s = self._api_rate_limit_remaining_s()
+                if wait_s <= 0:
+                    wait_s = self._note_rate_limited(self._rate_limit_cooldown_s)
+                else:
+                    self._note_rate_limited(wait_s)
+                base = self._safe_error_message(e)
+                self.error_message_changed.emit(base)
+                self.toast_message.emit(base, "warning")
                 raise
 
-            base = msg
+            # AI providers often recover quickly after a brief pause.
+            wait_s = self._note_rate_limited(2.0)
+            base = self._safe_error_message(e)
             self.error_message_changed.emit(base)
             self.toast_message.emit(base, "warning")
 
-            self.toast_message.emit("准备重试中（2秒）", "info")
-            await asyncio.sleep(1)
-            if token != self._active_token:
-                raise
-
-            self.toast_message.emit("准备重试中（1秒）", "info")
-            await asyncio.sleep(1)
-            if token != self._active_token:
-                raise
+            remaining = int(max(1.0, wait_s))
+            while remaining > 0:
+                self.toast_message.emit(f"请求过于频繁，{remaining} 秒后重试", "info")
+                await asyncio.sleep(1)
+                remaining -= 1
+                if token != self._active_token:
+                    raise
 
             return await once()
 

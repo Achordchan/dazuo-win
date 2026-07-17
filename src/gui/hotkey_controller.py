@@ -22,6 +22,8 @@ class HotkeyController:
 
         if sys.platform != "darwin" or self.main_window._is_macos_accessibility_enabled():
             self.hotkey_listener.start()
+            # 不默认启动剪贴板双复制监视器：它无法区分来源，容易把普通程序剪贴板变化误发到远程翻译。
+            # 如需兼容特殊环境，请显式调用 start_clipboard_monitor()。
             self._started = True
             logger.info("成功启动快捷键监听")
             return

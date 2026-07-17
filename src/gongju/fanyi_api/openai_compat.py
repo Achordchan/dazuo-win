@@ -54,8 +54,134 @@ class OpenAICompatibleAPI(FanYiJieKou):
         if inspect.isawaitable(result):
             await result
 
+    def _status_code(self, error: Exception):
+        return getattr(error, "status_code", None) or getattr(error, "status", None)
+
+    def _is_missing_models_endpoint(self, error: Exception) -> bool:
+        status = self._status_code(error)
+        # When the provider returns an explicit status, only missing-route
+        # responses may fall back to a chat probe.
+        if status is not None:
+            return status in (404, 405)
+
+        message = str(error or "").lower()
+        # No status code: require a missing-route signal, not auth/server noise.
+        route_markers = (
+            "not found",
+            "method not allowed",
+            "/models",
+            "no route",
+            "unknown url",
+            "404",
+            "405",
+        )
+        auth_or_server_markers = (
+            "401",
+            "403",
+            "unauthorized",
+            "forbidden",
+            "invalid api key",
+            "authentication",
+            "permission",
+            "500",
+            "502",
+            "503",
+            "504",
+            "bad gateway",
+            "service unavailable",
+        )
+        if any(marker in message for marker in auth_or_server_markers):
+            return False
+        return any(marker in message for marker in route_markers)
+
+    def _extract_model_ids(self, response) -> list[str]:
+        """Collect model ids from an OpenAI-compatible models.list response."""
+        ids: list[str] = []
+        if response is None:
+            return ids
+
+        data = getattr(response, "data", None)
+        if data is None and isinstance(response, dict):
+            data = response.get("data")
+        if data is None:
+            # Some SDKs make the response itself iterable.
+            try:
+                data = list(response)
+            except TypeError:
+                data = []
+
+        for item in data or []:
+            model_id = getattr(item, "id", None)
+            if model_id is None and isinstance(item, dict):
+                model_id = item.get("id") or item.get("model")
+            if model_id is None and isinstance(item, str):
+                model_id = item
+            text = str(model_id or "").strip()
+            if text:
+                ids.append(text)
+        return ids
+
+    def _model_listed(self, model_ids: list[str], model: str) -> bool:
+        """Only accept the exact configured model id.
+
+        Suffix matching is unsafe: a catalog entry like openai/gpt-4o must not
+        make a misconfigured gpt-4o look healthy, because chat may still reject it.
+        """
+        wanted = (model or "").strip()
+        if not wanted:
+            return False
+        return wanted in model_ids
+
+    async def _probe_chat_model(self) -> None:
+        await self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=1,
+            temperature=0,
+        )
+
     async def health_check(self) -> None:
-        await self.fanyi("test", "自动检测", "简体中文")
+        if not self.base_url or not self.model or not str(self.api_key or "").strip():
+            raise ValueError("AI 翻译配置不完整")
+
+        models = getattr(self.client, "models", None)
+        if models is not None and hasattr(models, "list"):
+            try:
+                response = await models.list()
+            except Exception as error:
+                # Some OpenAI-compatible providers only expose chat completions.
+                if not self._is_missing_models_endpoint(error):
+                    message = sanitize_error_message(error, [self.api_key])
+                    raise ValueError(f"AI 服务健康检查失败: {message}") from error
+                logger.info("models.list unsupported for %s; falling back to chat probe", self.base_url)
+            else:
+                model_ids = self._extract_model_ids(response)
+                if model_ids:
+                    if self._model_listed(model_ids, self.model):
+                        return
+                    # Model catalog is available but does not include the configured model.
+                    raise ValueError(
+                        f"AI 服务已连接，但模型不可用: {self.model}"
+                    )
+                # Empty/unparseable catalog: still prove the configured model is callable.
+                logger.info(
+                    "models.list returned no usable ids for %s; probing chat with model %s",
+                    self.base_url,
+                    self.model,
+                )
+                try:
+                    await self._probe_chat_model()
+                    return
+                except Exception as error:
+                    message = sanitize_error_message(error, [self.api_key])
+                    raise ValueError(f"AI 服务健康检查失败: {message}") from error
+
+        # Fallback probe for endpoints without /models.
+        try:
+            await self._probe_chat_model()
+        except Exception as error:
+            message = sanitize_error_message(error, [self.api_key])
+            raise ValueError(f"AI 服务健康检查失败: {message}") from error
 
     async def fanyi(self, text: str, source_lang: str, target_lang: str) -> tuple[str, Optional[str]]:
         if not text:
@@ -76,7 +202,7 @@ class OpenAICompatibleAPI(FanYiJieKou):
                 messages=[
                     {
                         "role": "system",
-                        "content": "你是专业翻译。只返回翻译结果，不要添加任何解释或额外内容。注意：输入里可能包含特殊标记 [[DAZUO_NL]]，它代表换行。你必须原样保留该标记（不要翻译、不要删除、不要新增），并保持其相对位置不变。",
+                        "content": "你是专业翻译。只返回翻译结果，不要添加任何解释或额外内容。注意：输入里可能包含特殊标记 [[DZFYQ_NL_*]]，它代表换行。你必须原样保留该标记（不要翻译、不要删除、不要新增），并保持其相对位置不变。",
                     },
                     {"role": "user", "content": user_prompt},
                 ],

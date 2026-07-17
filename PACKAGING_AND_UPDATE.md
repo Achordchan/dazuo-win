@@ -43,9 +43,19 @@ python -m nuitka `
 
 python tools\write_update_manifest.py dist_nuitka\main.dist
 python tools\create_windows_update_package.py dist_nuitka\main.dist output\dazuofanyiguan_full.for.windows_$version.zip
+# 私钥请放在仓库外；也可用环境变量 DZFYQ_UPDATE_PRIVATE_KEY
+python tools\sign_windows_update_package.py output\dazuofanyiguan_full.for.windows_$version.zip --version $version --private-key $env:DZFYQ_UPDATE_PRIVATE_KEY
+# 默认构建门禁：结构检查 + 用客户端内置公钥验签（错误私钥会在这里失败）
 python tools\verify_windows_package.py output\dazuofanyiguan_full.for.windows_$version.zip $version
 .\tools\smoke_update_from_1_2_4.ps1 -NewZip output\dazuofanyiguan_full.for.windows_$version.zip -ExpectedVersion $version
 ```
+
+签名说明：
+- Windows 使用 `DZFYQ-SIG-WINDOWS:<base64>`（兼容旧标记 `DZFYQ-SIG:<base64>`）。
+- macOS 使用 `DZFYQ-SIG-MACOS:<base64>`。两个平台必须各自签名，不能共用同一条 SIG。
+- `tools/sign_windows_update_package.py` 会按包文件名推断 platform/package_type，输出对应标记并写入 `*.sig.json`。
+- `build.bat` / `clean_and_build.bat` 在签名后会调用 `tools/verify_windows_package.py`：除检查包结构外，还会读取 `*.zip.sig.json`，用客户端内置公钥验证私钥是否匹配；密钥不匹配时构建失败。
+- 发布时把当前版本各平台标记都追加到 Gitee Release 更新说明；需要强制更新时再额外加 `update=1`。
 
 > Windows 在线更新包会把内置引擎打成 `deeplx.exe.payload`，避免 1.2.4 旧更新器覆盖正在运行的 `deeplx.exe` 时回滚；新程序会在缺少 `deeplx.exe` 时自动从 payload 写入用户引擎缓存。
 
@@ -167,9 +177,10 @@ dazuofanyiguan.dmg
 - 比较 `tag_name` 与当前 `APP_VERSION`
 - 若版本更新，则进入下载流程
 
-### 3.4 强制更新标记
-- 在 Release 的更新说明里包含 `update=1`
-- 命中后视为**强制更新**（未更新将退出）
+### 3.4 强制更新与签名标记
+- 在 Release 的更新说明里包含 `update=1` 时视为**强制更新**（未更新将退出）
+- Windows 全量更新包还必须在更新说明中包含 `DZFYQ-SIG:<base64>`，由 `tools/sign_windows_update_package.py` 生成
+- 缺少签名的更新包会被客户端拒绝
 
 ### 3.5 按平台选择安装包
 - macOS：选择 `.dmg`

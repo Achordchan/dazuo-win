@@ -186,4 +186,13 @@ class GoogleAPI(FanYiJieKou):
             self.session = None
 
     async def health_check(self) -> None:
-        await self.fanyi("test", "自动检测", "简体中文")
+        session = await self._ensure_session()
+        async with session.get(
+            "https://translate.googleapis.com/translate_a/single",
+            params={"client": "gtx", "sl": "en", "tl": "zh-CN", "dt": "t", "q": "."},
+        ) as response:
+            if response.status != 200:
+                raise RuntimeError(f"Google 翻译不可用: HTTP {response.status}")
+            data = await response.json(content_type=None)
+            if not data:
+                raise RuntimeError("Google 翻译健康检查返回空结果")

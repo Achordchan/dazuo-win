@@ -51,6 +51,9 @@ def apply_theme(self, theme_name):
     try:
         logger.info(f"切换到主题: {theme_name}")
 
+        valid_themes = {"dark", "light", "pink"}
+        if theme_name not in valid_themes:
+            theme_name = "dark"
         current_theme = self.config.get("theme", "dark")
         if current_theme != theme_name:
             self.config.set("theme", theme_name)

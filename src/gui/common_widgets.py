@@ -49,29 +49,29 @@ class ShuRuKuang(QTextEdit):
         menu.clear()
         
         # 添加自定义菜单项
-        actions = {
-            "撤销": "Ctrl+Z",
-            "重做": "Ctrl+Y",
-            None: None,  # 分隔符
-            "剪切": "Ctrl+X",
-            "复制": "Ctrl+C",
-            "粘贴": "Ctrl+V",
-            "删除": "Del",
-            None: None,  # 分隔符
-            "全选": "Ctrl+A",
-            None: None,  # 分隔符
-            "🌟 大佐翻译官": None,
-            "👤 作者: Achord": None
-        }
-        
-        for text, shortcut in actions.items():
+        actions = [
+            ('撤销', 'Ctrl+Z'),
+            ('重做', 'Ctrl+Y'),
+            (None, None),
+            ('剪切', 'Ctrl+X'),
+            ('复制', 'Ctrl+C'),
+            ('粘贴', 'Ctrl+V'),
+            ('删除', 'Del'),
+            (None, None),
+            ('全选', 'Ctrl+A'),
+            (None, None),
+            ('大佐翻译官', None),
+            ('作者: Achord', None),
+        ]
+
+        for text, shortcut in actions:
             if text is None:
                 menu.addSeparator()
             else:
                 action = menu.addAction(text)
                 if shortcut:
                     action.setShortcut(shortcut)
-                if "大佐翻译官" in text or "作者" in text:
+                if text in {"大佐翻译官", "作者: Achord"}:
                     action.setEnabled(False)
         
         menu.setStyleSheet(build_menu_stylesheet(self))
@@ -90,9 +90,9 @@ class ShuRuKuang(QTextEdit):
             "复制": self.copy,
             "粘贴": self.paste,
             "删除": lambda: self.textCursor().removeSelectedText(),
-            "全选": self.selectAll
+            "全选": self.selectAll,
         }
-        
+
         if action_text in action_map:
             action_map[action_text]()
     

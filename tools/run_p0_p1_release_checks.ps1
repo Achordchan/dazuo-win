@@ -49,7 +49,6 @@ if (-not $SetupExe) {
 $Package = Resolve-RepoPath $Package
 $OldPackage = Resolve-RepoPath $OldPackage
 $SetupExe = Resolve-RepoPath $SetupExe
-$ArchiveViewer = Join-Path (Split-Path -Parent $Python) "pyi-archive_viewer.exe"
 
 Push-Location $RepoRoot
 try {
@@ -68,14 +67,104 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "verify_windows_package.py failed with code $LASTEXITCODE" }
     }
 
-    Invoke-Check "setup payload verification" {
-        if (-not (Test-Path -LiteralPath $ArchiveViewer -PathType Leaf)) {
-            throw "pyi-archive_viewer.exe not found: $ArchiveViewer"
+    Invoke-Check "package signature artifact" {
+        $sigPath = "$Package.sig.json"
+        if (-not (Test-Path -LiteralPath $sigPath -PathType Leaf)) {
+            throw "signature json missing: $sigPath (run tools/sign_windows_update_package.py)"
         }
-        $payloadName = "dazuofanyiguan_full.for.windows_$ExpectedVersion.zip"
-        $archiveText = (& $ArchiveViewer $SetupExe -l 2>&1 | Out-String)
-        if (-not ($archiveText.Contains("payload") -and $archiveText.Contains($payloadName))) {
-            throw "setup payload missing $payloadName"
+        $sig = Get-Content -LiteralPath $sigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $sig.signature) {
+            throw "signature json missing signature field: $sigPath"
+        }
+        if (-not [string]$sig.release_notes_marker) {
+            throw "signature json missing release notes marker: $sigPath"
+        }
+        $marker = [string]$sig.release_notes_marker
+        if (-not (
+            $marker.StartsWith("DZFYQ-SIG:") -or
+            $marker.StartsWith("DZFYQ-SIG-WINDOWS:") -or
+            $marker.StartsWith("DZFYQ-SIG-WIN:")
+        )) {
+            throw "signature json missing Windows DZFYQ-SIG release notes marker: $sigPath"
+        }
+
+        $packageItem = Get-Item -LiteralPath $Package
+        $expectedName = $packageItem.Name
+        $expectedSize = [int64]$packageItem.Length
+
+        # Fully consume verifier output before inspecting it. Do not pipe to
+        # Select-Object -First, which can stop the Python process early.
+        $verifyOut = & $Python tools\verify_update_signature.py `
+            $Package `
+            --version $ExpectedVersion `
+            --signature ([string]$sig.signature) `
+            --filename $expectedName `
+            --platform windows `
+            --package-type windows_full_update `
+            --print-sha256
+        $verifyExit = $LASTEXITCODE
+        $verifyText = (($verifyOut | ForEach-Object { "$_" }) -join "`n")
+        if ($verifyExit -ne 0) {
+            throw "embedded public-key signature verification failed for $Package (exit=$verifyExit)"
+        }
+        if ($verifyText -notmatch "signature-ok") {
+            throw "embedded public-key signature verification did not confirm success"
+        }
+        $actualSha = $null
+        foreach ($line in ($verifyText -split "`n")) {
+            $trim = $line.Trim()
+            if ($trim -match '^sha256=([A-Fa-f0-9]{64})$') {
+                $actualSha = $Matches[1].ToLowerInvariant()
+                break
+            }
+            if ($trim -match '^[A-Fa-f0-9]{64}$') {
+                $actualSha = $trim.ToLowerInvariant()
+                break
+            }
+        }
+        if (-not $actualSha -or $actualSha.Length -ne 64) {
+            throw "failed to read package sha256 from signature verifier output"
+        }
+
+        $sigVersion = ([string]$sig.app_version).TrimStart("vV")
+        $wantVersion = $ExpectedVersion.TrimStart("vV")
+        if ($sigVersion -ne $wantVersion) {
+            throw "signature version mismatch: expected $ExpectedVersion, found $($sig.app_version)"
+        }
+        if ([string]$sig.filename -and [string]$sig.filename -ne $expectedName) {
+            throw "signature filename mismatch: expected $expectedName, found $($sig.filename)"
+        }
+        if ($null -ne $sig.size_bytes -and [int64]$sig.size_bytes -ne $expectedSize) {
+            throw "signature size mismatch: expected $expectedSize, found $($sig.size_bytes)"
+        }
+        if ([string]$sig.platform -and ([string]$sig.platform).ToLowerInvariant() -notin @("windows", "win32", "win")) {
+            throw "signature platform mismatch: expected windows, found $($sig.platform)"
+        }
+        if ([string]$sig.package_type -and [string]$sig.package_type -ne "windows_full_update") {
+            throw "signature package_type mismatch: expected windows_full_update, found $($sig.package_type)"
+        }
+        $sigSha = ([string]$sig.sha256).Trim().ToLowerInvariant()
+        if ($sigSha -and $sigSha -ne $actualSha) {
+            throw "signature sha256 mismatch: expected $actualSha, found $sigSha"
+        }
+    }
+
+    Invoke-Check "setup installer verification" {
+        if (-not (Test-Path -LiteralPath $SetupExe -PathType Leaf)) {
+            throw "setup exe not found: $SetupExe"
+        }
+        $item = Get-Item -LiteralPath $SetupExe
+        if ($item.Length -lt 1MB) {
+            throw "setup exe too small: $($item.Length) bytes"
+        }
+        # Inno Setup installers are PE files, not PyInstaller archives.
+        $bytes = [System.IO.File]::ReadAllBytes($SetupExe)
+        $ascii = [System.Text.Encoding]::ASCII.GetString($bytes[0..([Math]::Min($bytes.Length-1, 4MB))])
+        if (-not ($ascii.Contains("Inno Setup") -or $ascii.Contains("InnoSetup"))) {
+            throw "setup exe does not look like an Inno Setup installer"
+        }
+        if (-not $ascii.Contains($ExpectedVersion) -and -not $ascii.Contains("v$ExpectedVersion")) {
+            Write-Warning "setup exe did not embed plain version string $ExpectedVersion (may still be valid)"
         }
     }
 

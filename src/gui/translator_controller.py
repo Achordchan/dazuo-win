@@ -65,9 +65,7 @@ async def _init_translation_api(self):
             self.status_indicator.set_status("connecting", "正在连接...")
             update_service_display(self)
 
-            if getattr(self.fanyi, "current_api_name", None) is not None:
-                await self.fanyi.close_current_api()
-
+            # Build and validate the new API first; only then replace the live one.
             new_api = build_translation_api(self.config)
             await new_api.health_check()
 

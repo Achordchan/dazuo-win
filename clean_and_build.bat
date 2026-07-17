@@ -47,6 +47,20 @@ if errorlevel 1 exit /b 1
 if not exist output mkdir output
 python tools\create_windows_update_package.py dist_nuitka\main.dist output\dazuofanyiguan_full.for.windows_%VERSION%.zip
 if errorlevel 1 exit /b 1
-echo Verifying Windows full update package...
+echo Signing Windows full update package...
+if not defined DZFYQ_UPDATE_PRIVATE_KEY (
+  echo DZFYQ_UPDATE_PRIVATE_KEY is not set.
+  echo Set DZFYQ_UPDATE_PRIVATE_KEY to an external Ed25519 private key PEM path outside the repo.
+  exit /b 1
+)
+if not exist "%DZFYQ_UPDATE_PRIVATE_KEY%" (
+  echo Missing update signing private key: %DZFYQ_UPDATE_PRIVATE_KEY%
+  echo Set DZFYQ_UPDATE_PRIVATE_KEY to your external Ed25519 private key PEM path.
+  exit /b 1
+)
+python tools\sign_windows_update_package.py output\dazuofanyiguan_full.for.windows_%VERSION%.zip --version %VERSION% --private-key "%DZFYQ_UPDATE_PRIVATE_KEY%"
+if errorlevel 1 exit /b 1
+
+echo Verifying Windows full update package structure and embedded public-key signature...
 python tools\verify_windows_package.py output\dazuofanyiguan_full.for.windows_%VERSION%.zip %VERSION%
 if errorlevel 1 exit /b 1

@@ -1,6 +1,8 @@
 import asyncio
 import logging
-from typing import Optional
+import math
+import time
+from typing import ClassVar, Optional
 
 import aiohttp
 
@@ -67,12 +69,50 @@ class AchordBuiltinAPI(FanYiJieKou):
         "自动检测": "auto",
     }
 
+    # Shared across instances so mini window / main window / reconnect all honor
+    # the same DeepLX/IP ban cooldown window.
+    _shared_rate_limit_until: ClassVar[float] = 0.0
+    # Free upstream often bans the IP for longer than a few seconds.
+    _rate_limit_cooldown_s: ClassVar[float] = 60.0
+
     def __init__(self, manager: Optional[AchordEngineManager] = None):
         self.manager = manager or AchordEngineManager()
         self.session: Optional[aiohttp.ClientSession] = None
         self.api_key = ""
         self._timeout = aiohttp.ClientTimeout(total=25, connect=8, sock_read=20)
-        self._semaphore = asyncio.Semaphore(3)
+        # Single in-flight translate reduces 429 storms while typing / double-copying.
+        self._semaphore = asyncio.Semaphore(1)
+
+    @classmethod
+    def rate_limit_remaining_s(cls) -> float:
+        return max(0.0, float(cls._shared_rate_limit_until) - time.monotonic())
+
+    @classmethod
+    def note_rate_limited(cls, cooldown_s: Optional[float] = None) -> float:
+        wait_s = float(cls._rate_limit_cooldown_s if cooldown_s is None else cooldown_s)
+        wait_s = max(1.0, wait_s)
+        cls._shared_rate_limit_until = max(cls._shared_rate_limit_until, time.monotonic() + wait_s)
+        return wait_s
+
+    def _raise_if_rate_limited(self) -> None:
+        remaining = self.rate_limit_remaining_s()
+        if remaining <= 0:
+            return
+        seconds = max(1, int(math.ceil(remaining)))
+        raise ValueError(f"Achord 内置引擎请求过于频繁，请 {seconds} 秒后再试")
+
+    @staticmethod
+    def _looks_like_rate_limit(status: Optional[int], message: str) -> bool:
+        if status == 429:
+            return True
+        text = str(message or "").lower()
+        return (
+            "429" in text
+            or "too many requests" in text
+            or "rate limit" in text
+            or "ratelimit" in text
+            or "请求过于频繁" in str(message or "")
+        )
 
     async def _ensure_ready(self) -> aiohttp.ClientSession:
         await self.manager.ensure_started()
@@ -118,6 +158,9 @@ class AchordBuiltinAPI(FanYiJieKou):
         if not text:
             return "", None
 
+        # Enforce cooldown for every entry path (main window, mini, double-copy).
+        self._raise_if_rate_limited()
+
         target_code = self.TARGET_LANG_CODES.get(target_lang)
         if not target_code:
             raise ValueError(f"Achord 内置引擎暂不支持目标语言：{target_lang}")
@@ -133,17 +176,33 @@ class AchordBuiltinAPI(FanYiJieKou):
         }
 
         async with self._semaphore:
+            # Re-check after waiting for the semaphore; another call may have been banned.
+            self._raise_if_rate_limited()
             session = await self._ensure_ready()
             try:
                 async with session.post(self._translate_url(), json=payload) as response:
                     data = await self._read_json(response)
+                    message = data.get("message") or data.get("msg") or data.get("error") or ""
                     if response.status != 200:
-                        message = data.get("message") or data.get("msg") or data.get("error") or ""
-                        raise ValueError(f"Achord 内置引擎翻译失败: HTTP {response.status} {message}".strip())
+                        if self._looks_like_rate_limit(response.status, str(message)):
+                            wait_s = self.note_rate_limited()
+                            seconds = max(1, int(math.ceil(wait_s)))
+                            raise ValueError(
+                                f"Achord 内置引擎请求过于频繁（HTTP {response.status}），"
+                                f"已暂停 {seconds} 秒，请稍后再试"
+                            )
+                        raise ValueError(
+                            f"Achord 内置引擎翻译失败: HTTP {response.status} {message}".strip()
+                        )
 
                     code = data.get("code")
                     if code not in (None, 0, 200):
-                        message = data.get("message") or data.get("msg") or data.get("error") or ""
+                        if self._looks_like_rate_limit(None, f"{code} {message}"):
+                            wait_s = self.note_rate_limited()
+                            seconds = max(1, int(math.ceil(wait_s)))
+                            raise ValueError(
+                                f"Achord 内置引擎请求过于频繁，已暂停 {seconds} 秒，请稍后再试"
+                            )
                         raise ValueError(f"Achord 内置引擎翻译失败: {code} {message}".strip())
 
                     translated = self._extract_translation(data)
@@ -159,7 +218,28 @@ class AchordBuiltinAPI(FanYiJieKou):
                 raise ValueError(f"Achord 内置引擎网络错误: {error}") from error
 
     async def health_check(self) -> None:
-        await self.fanyi("test", "自动检测", "简体中文")
+        """Prove the local engine is up without spending a real translate quota.
+
+        ensure_started already waits until the process accepts loopback TCP.
+        We then open an authorized HTTP session and confirm the process is still
+        alive. A full /translate call is reserved for actual user translations.
+        """
+        await self._ensure_ready()
+        process = getattr(self.manager, "process", None)
+        if process is None or process.poll() is not None:
+            raise ValueError("Achord 内置引擎未运行")
+        port = getattr(self.manager, "port", None)
+        if not port:
+            raise ValueError("Achord 内置引擎端口不可用")
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", int(port))
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+        except Exception as error:
+            raise ValueError(f"无法连接到 Achord 内置引擎: {error}") from error
 
     async def close(self):
         if self.session:

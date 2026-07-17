@@ -171,4 +171,4 @@ class DeepLAPI(FanYiJieKou):
             self.session = None
 
     async def health_check(self) -> None:
-        await self.fanyi("test", "自动检测", "简体中文")
+        await verify_deepl_auth(self.api_key)

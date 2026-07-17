@@ -5,6 +5,12 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.gongju.update_trust import verify_package_authenticity  # noqa: E402
+
 
 def _version_parts(version: str) -> tuple[int, int, int]:
     parts = []
@@ -88,12 +94,86 @@ def verify_package(zip_path: Path, expected_version: str) -> None:
             )
 
 
+def verify_adjacent_signature(zip_path: Path, expected_version: str) -> None:
+    """Verify package against embedded public key using adjacent *.zip.sig.json.
+
+    This catches private-key / embedded-public-key mismatches that package
+    structure checks alone cannot detect.
+    """
+    sig_path = Path(str(zip_path) + ".sig.json")
+    if not sig_path.is_file():
+        raise RuntimeError(
+            f"signature json missing: {sig_path} "
+            "(run tools/sign_windows_update_package.py before verify)"
+        )
+
+    try:
+        sig = json.loads(sig_path.read_text(encoding="utf-8-sig"))
+    except Exception as error:
+        raise RuntimeError(f"invalid signature json: {sig_path}: {error}") from error
+
+    signature = str(sig.get("signature") or "").strip()
+    if not signature:
+        raise RuntimeError(f"signature json missing signature field: {sig_path}")
+
+    expected_name = zip_path.name
+    package_size = int(zip_path.stat().st_size)
+
+    sig_version = str(sig.get("app_version") or "").strip().lstrip("vV")
+    want_version = str(expected_version or "").strip().lstrip("vV")
+    if sig_version and want_version and sig_version != want_version:
+        raise RuntimeError(
+            f"signature version mismatch: expected {expected_version}, found {sig.get('app_version')}"
+        )
+
+    sig_name = str(sig.get("filename") or "").strip()
+    if sig_name and sig_name != expected_name:
+        raise RuntimeError(
+            f"signature filename mismatch: expected {expected_name}, found {sig_name}"
+        )
+
+    if sig.get("size_bytes") is not None and int(sig["size_bytes"]) != package_size:
+        raise RuntimeError(
+            f"signature size mismatch: expected {package_size}, found {sig.get('size_bytes')}"
+        )
+
+    platform = str(sig.get("platform") or "windows").strip().lower()
+    if platform and platform not in {"windows", "win32", "win"}:
+        raise RuntimeError(f"signature platform mismatch: expected windows, found {platform}")
+
+    package_type = str(sig.get("package_type") or "windows_full_update").strip()
+    if package_type and package_type != "windows_full_update":
+        raise RuntimeError(
+            f"signature package_type mismatch: expected windows_full_update, found {package_type}"
+        )
+
+    payload = verify_package_authenticity(
+        package_path=str(zip_path),
+        expected_version=expected_version,
+        signature_b64=signature,
+        expected_filename=expected_name,
+        package_type="windows_full_update",
+        platform="windows",
+    )
+
+    sig_sha = str(sig.get("sha256") or "").strip().lower()
+    actual_sha = str(payload.get("sha256") or "").strip().lower()
+    if sig_sha and actual_sha and sig_sha != actual_sha:
+        raise RuntimeError(
+            f"signature sha256 mismatch: expected {actual_sha}, found {sig_sha}"
+        )
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         print("usage: verify_windows_package.py <zip_path> <expected_version>")
         return 2
-    verify_package(Path(sys.argv[1]).resolve(), sys.argv[2])
+    zip_path = Path(sys.argv[1]).resolve()
+    expected_version = sys.argv[2]
+    verify_package(zip_path, expected_version)
+    verify_adjacent_signature(zip_path, expected_version)
     print(f"Verified Windows package: {sys.argv[1]} ({sys.argv[2]})")
+    print("Verified update signature against embedded public key")
     return 0
 
 

@@ -163,8 +163,7 @@ def apply_macos_dock_visibility(show_in_dock: bool) -> None:
             NSApplicationActivationPolicyRegular,
         )
     except Exception as exc:
-        logger.warning("无法设置 Dock 显示状态: %s", exc)
-        return
+        raise RuntimeError(f"无法设置 Dock 显示状态: {exc}") from exc
 
     try:
         app = NSApplication.sharedApplication()
@@ -175,7 +174,7 @@ def apply_macos_dock_visibility(show_in_dock: bool) -> None:
         )
         app.setActivationPolicy_(policy)
     except Exception as exc:
-        logger.warning("设置 Dock 显示状态失败: %s", exc)
+        raise RuntimeError(f"设置 Dock 显示状态失败: {exc}") from exc
 
 
 def _get_windows_startup_dir() -> str:

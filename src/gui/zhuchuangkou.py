@@ -583,18 +583,8 @@ class ZhuChuangKou(QMainWindow):
             self.config.set("translation.target_lang", self.target_lang_combo.currentText())
     
     def _debounce_translate(self):
-        """使用防抖处理翻译请求"""
-        if hasattr(self, '_translate_timer'):
-            self._translate_timer.stop()
-        
-        # 如果本很短，可以更快地触发翻译
-        text = self.input_text.toPlainText()
-        delay = 200 if len(text) < 10 else 500  # 短文本200ms，长文本500ms
-        
-        self._translate_timer = QTimer()
-        self._translate_timer.setSingleShot(True)
-        self._translate_timer.timeout.connect(lambda: asyncio.create_task(self._on_text_changed()))
-        self._translate_timer.start(delay)
+        # Legacy entry point kept for compatibility; route through ViewModel.
+        self._vm_on_input_text_changed()
 
     def _get_vm_context(self) -> TranslationContext:
         return self.translation_panel_controller.build_context()
@@ -800,106 +790,8 @@ class ZhuChuangKou(QMainWindow):
         return await _translator_controller.init_translation_api(self)
 
     async def _on_text_changed(self):
-        """输入文本变化时触发翻译"""
-        try:
-            input_text = self.input_text.toPlainText()
-            if not input_text:
-                self.output_text.clear()
-                self._reset_source_lang_text()
-                self.switch_button.setEnabled(False)  # 无内容时禁用互转按钮
-                return
-            
-            # 显示加载动画
-            self.output_text.start_loading()
-            
-            try:
-                context = self._get_vm_context()
-                source_lang = context.source_lang
-                target_lang = context.target_lang
-                
-                # 按行分割文本并去除空行
-                lines = [line for line in input_text.split('\n') if line.strip()]
-                
-                # 如果没有非空行，直接返回空结果
-                if not lines:
-                    self.output_text.stop_loading()
-                    self.output_text.setPlainText("")
-                    return
-                
-                # 使用第一个非空行进行语言检测
-                first_result, detected_lang = await self.fanyi.fanyi(
-                    lines[0],
-                    source_lang,
-                    target_lang,
-                    expected_api_name=context.api_name,
-                    expected_api_generation=context.api_generation,
-                )
-                
-                # 更新语言检测显示
-                if source_lang == "自动检测" and detected_lang:
-                    try:
-                        lang_map = {v: k for k, v in self.fanyi._fanyi_jiekou.LANG_CODES.items()}
-                        detected_name = lang_map.get(detected_lang, detected_lang)
-                        self._detected_lang = detected_lang
-                        self._detected_lang_text = f"自动检测 ({detected_name})"
-                        
-                        # 强制更新显示
-                        self.source_lang_combo.setItemText(0, self._detected_lang_text)
-                        logger.info(f"更新语言检测显示: {self._detected_lang_text}")
-                    except Exception as e:
-                        logger.error(f"更新语言检测显示失败: {e}")
-                
-                # 备翻译结果
-                translated_lines = []
-                current_line_index = 0
-                
-                # 处理原始文本中的每一行，保持空行
-                for original_line in input_text.split('\n'):
-                    if not original_line.strip():
-                        # 保持空行
-                        translated_lines.append('')
-                    else:
-                        # 对于非空行，使用翻译结果
-                        if current_line_index == 0:
-                            # 第一个非空行已经翻译过了
-                            leading_spaces = len(original_line) - len(original_line.lstrip())
-                            translated_lines.append(' ' * leading_spaces + first_result)
-                        else:
-                            # 翻译其他非空行
-                            leading_spaces = len(original_line) - len(original_line.lstrip())
-                            result, _ = await self.fanyi.fanyi(
-                                original_line.strip(),
-                                source_lang,
-                                target_lang,
-                                expected_api_name=context.api_name,
-                                expected_api_generation=context.api_generation,
-                            )
-                            translated_lines.append(' ' * leading_spaces + result)
-                        current_line_index += 1
-                
-                # 停止加载动画
-                self.output_text.stop_loading()
-                
-                # 合并结果
-                final_result = '\n'.join(translated_lines)
-                self.output_text.setPlainText(final_result)
-                
-                # 有翻译结果时启用互转按钮
-                self.switch_button.setEnabled(bool(final_result.strip()))
-                
-                logger.info("翻译完成")
-                
-            except Exception as e:
-                self.output_text.stop_loading()
-                logger.error(f"翻译过程出错: {e}")
-                self.tishi.showMessage(f"翻译出错: {str(e)}", type="error")
-                self.switch_button.setEnabled(False)  # 出错时禁用互转按钮
-                
-        except Exception as e:
-            self.output_text.stop_loading()
-            logger.error(f"处理错误: {e}")
-            self.tishi.showMessage(f"处理错误: {str(e)}", type="error")
-            self.switch_button.setEnabled(False)  # 出错时禁用互转按钮
+        # Legacy async path removed; ViewModel owns translation requests.
+        self.translation_panel_controller.on_input_text_changed()
 
     def _reset_source_lang_text(self):
         """重置源语言文本显示"""
@@ -951,9 +843,9 @@ class ZhuChuangKou(QMainWindow):
         except Exception as e:
             logger.error(f"窗口置顶失败: {e}")
 
-    def _handle_copy_translate(self):
+    def _handle_copy_translate(self, text: str = ""):
         """处理复制后翻译的快捷键"""
-        self.window_mode_controller.handle_copy_translate()
+        self.window_mode_controller.handle_copy_translate(text)
 
     def _handle_double_copy_text(self, text: str):
         self.window_mode_controller.handle_double_copy_text(text)

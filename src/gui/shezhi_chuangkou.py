@@ -623,6 +623,10 @@ class SheZhiChuangKou(QDialog):
     def _save_form_to_config(self):
         """保存设置。"""
         try:
+            updates = {}
+            pending_autostart = None
+            pending_show_in_dock = None
+
             hotkey = ""
             if hasattr(self, "copy_hotkey_input"):
                 hotkey = (self.copy_hotkey_input.text() or "").strip().lower().replace(" ", "")
@@ -638,50 +642,33 @@ class SheZhiChuangKou(QDialog):
                         buttons=QMessageBox.Ok,
                     )
                     return
-                self.parent.config.set("shortcuts.copy_translate", hotkey)
+                updates["shortcuts.copy_translate"] = hotkey
 
             if hasattr(self, "source_font_size_spin"):
-                self.parent.config.set("display.source_font_size", self.source_font_size_spin.value())
+                updates["display.source_font_size"] = self.source_font_size_spin.value()
             if hasattr(self, "target_font_size_spin"):
-                self.parent.config.set("display.target_font_size", self.target_font_size_spin.value())
+                updates["display.target_font_size"] = self.target_font_size_spin.value()
 
             if hasattr(self, "auto_start_checkbox"):
                 if self.auto_start_checkbox.checkState() != Qt.PartiallyChecked:
-                    auto_start = self.auto_start_checkbox.isChecked()
-                    try:
-                        configure_autostart(auto_start)
-                        actual_auto_start = get_autostart_state()
-                        if actual_auto_start is None:
-                            raise RuntimeError("开机自启已写入，但无法读取系统启动项状态，请稍后重新打开设置页确认。")
-                        if actual_auto_start != auto_start:
-                            raise RuntimeError("开机自启状态校验失败，请检查系统启动目录权限后重试。")
-                        self.parent.config.set("auto_start", auto_start)
-                    except Exception as e:
-                        self._load_auto_start_state()
-                        show_themed_message(
-                            self,
-                            icon=QMessageBox.Warning,
-                            title="开机自启失败",
-                            text=str(e),
-                            buttons=QMessageBox.Ok,
-                        )
-                        return
+                    pending_autostart = self.auto_start_checkbox.isChecked()
+                    updates["auto_start"] = pending_autostart
 
             if hasattr(self, "show_in_dock_checkbox"):
-                show_in_dock = self.show_in_dock_checkbox.isChecked()
-                self.parent.config.set("show_in_dock", show_in_dock)
-                apply_macos_dock_visibility(show_in_dock)
+                pending_show_in_dock = self.show_in_dock_checkbox.isChecked()
+                updates["show_in_dock"] = pending_show_in_dock
 
             api_names = ["google", "deepl", "achord_builtin", "openai_compat"]
             api_index = self.translation_api_combo.currentIndex()
             api_name = api_names[api_index] if 0 <= api_index < len(api_names) else "google"
-            self.parent.config.set("translation.api", api_name)
+            updates["translation.api"] = api_name
 
             if hasattr(self, "deepl_api_key_input"):
-                self.parent.config.set("deepl.api_key", self.deepl_api_key_input.text().strip())
-                self.parent.config.set(
-                    "deepl.account_type",
-                    infer_deepl_plan(self.deepl_api_key_input.text().strip()) if self.deepl_api_key_input.text().strip() else "",
+                updates["deepl.api_key"] = self.deepl_api_key_input.text().strip()
+                updates["deepl.account_type"] = (
+                    infer_deepl_plan(self.deepl_api_key_input.text().strip())
+                    if self.deepl_api_key_input.text().strip()
+                    else ""
                 )
 
             vendor = self.vendor_combo.currentText()
@@ -691,19 +678,105 @@ class SheZhiChuangKou(QDialog):
                 vendor = inferred_vendor
 
             self._save_vendor_profile(vendor)
-            self.parent.config.set("openai_compat.profiles", self._profiles_draft)
+            updates["openai_compat.profiles"] = self._profiles_draft
 
             # 同步写入当前生效配置（保持向后兼容：其他地方仍读取 openai_compat.base_url 等）
-            self.parent.config.set("openai_compat.vendor", vendor)
-            self.parent.config.set("openai_compat.base_url", base_url)
-            self.parent.config.set("openai_compat.model", self.model_input.text().strip())
-            self.parent.config.set("openai_compat.api_key", self.api_key_input.text().strip())
+            updates["openai_compat.vendor"] = vendor
+            updates["openai_compat.base_url"] = base_url
+            updates["openai_compat.model"] = self.model_input.text().strip()
+            updates["openai_compat.api_key"] = self.api_key_input.text().strip()
+
+            previous_auto_start = self.parent.config.get("auto_start")
+            previous_show_in_dock = self.parent.config.get("show_in_dock", True)
+
+            # Persist config first. Only apply OS-side side effects after a
+            # successful save so a failed write cannot leave system state dirty.
+            if hasattr(self.parent.config, "update_many"):
+                ok = self.parent.config.update_many(updates)
+            else:
+                for key, value in updates.items():
+                    self.parent.config.set(key, value, save=False)
+                ok = self.parent.config.save()
+            if not ok:
+                show_themed_message(
+                    self,
+                    icon=QMessageBox.Warning,
+                    title="保存失败",
+                    text="配置保存失败，系统启动项与程序坞状态未修改，请重试。",
+                    buttons=QMessageBox.Ok,
+                )
+                return
+
+            side_effect_warnings = []
+            reconcile = {}
+
+            if pending_autostart is not None:
+                try:
+                    configure_autostart(pending_autostart)
+                    actual_auto_start = get_autostart_state()
+                    if actual_auto_start is None:
+                        raise RuntimeError("开机自启已写入，但无法读取系统启动项状态，请稍后重新打开设置页确认。")
+                    if actual_auto_start != pending_autostart:
+                        raise RuntimeError("开机自启状态校验失败，请检查系统启动目录权限后重试。")
+                except Exception as e:
+                    actual_auto_start = get_autostart_state()
+                    if actual_auto_start is None:
+                        actual_auto_start = previous_auto_start
+                    if actual_auto_start is not None:
+                        reconcile["auto_start"] = bool(actual_auto_start)
+                    self._load_auto_start_state()
+                    side_effect_warnings.append(f"开机自启未生效：{e}")
+
+            if pending_show_in_dock is not None:
+                try:
+                    apply_macos_dock_visibility(pending_show_in_dock)
+                except Exception as e:
+                    # Dock visibility is process-local; fall back to previous config truth.
+                    reconcile["show_in_dock"] = bool(previous_show_in_dock)
+                    if hasattr(self, "show_in_dock_checkbox"):
+                        self.show_in_dock_checkbox.setChecked(bool(previous_show_in_dock))
+                    side_effect_warnings.append(f"程序坞显示状态未生效：{e}")
+
+            reconcile_ok = False
+            if reconcile:
+                try:
+                    if hasattr(self.parent.config, "update_many"):
+                        reconcile_ok = bool(self.parent.config.update_many(reconcile))
+                    else:
+                        for key, value in reconcile.items():
+                            self.parent.config.set(key, value, save=False)
+                        reconcile_ok = bool(self.parent.config.save())
+                    if not reconcile_ok:
+                        side_effect_warnings.append("同步实际系统状态到配置失败，磁盘写入未成功。")
+                except Exception as error:
+                    side_effect_warnings.append(f"同步实际系统状态到配置失败：{error}")
+
             if hasattr(self.parent, "apply_display_settings"):
                 self.parent.apply_display_settings()
-            
+
+            # Config is already on disk. Always accept so the main window reloads
+            # hotkeys/theme/API and runtime stays consistent. Cancel must not
+            # mean "keep old runtime while disk already has new config".
+            if side_effect_warnings:
+                warning_text = "配置已保存，但以下系统项未生效：" + "\n- " + "\n- ".join(side_effect_warnings)
+                if reconcile and reconcile_ok:
+                    warning_text += "\n\n对应配置已按实际系统状态回写，避免下次启动误用错误值。"
+                show_themed_message(
+                    self,
+                    icon=QMessageBox.Warning,
+                    title="部分设置未生效",
+                    text=warning_text,
+                    buttons=QMessageBox.Ok,
+                )
             self.accept()
         except Exception as e:
-            print(f"保存设置时出错: {e}")
+            show_themed_message(
+                self,
+                icon=QMessageBox.Warning,
+                title="保存失败",
+                text=f"保存设置时出错：{e}",
+                buttons=QMessageBox.Ok,
+            )
 
     def _on_check_update_clicked(self):
         _update_controller.check_update_with_message(self)
@@ -823,6 +896,9 @@ class SheZhiChuangKou(QDialog):
 
     def _on_verify_deepl_clicked(self):
         api_key = self.deepl_api_key_input.text().strip()
+        verify_generation = getattr(self, "_deepl_verify_generation", 0) + 1
+        self._deepl_verify_generation = verify_generation
+        verify_key_snapshot = api_key
         if not api_key:
             show_themed_message(
                 self,
@@ -848,7 +924,21 @@ class SheZhiChuangKou(QDialog):
                     limit = usage.get("character_limit")
                     if count is not None and limit:
                         detail = f"{count}/{limit}"
-                self.parent.config.set("deepl.api_key", api_key)
+                current_key = self.deepl_api_key_input.text().strip()
+                if verify_generation != getattr(self, "_deepl_verify_generation", 0):
+                    return
+                if current_key != verify_key_snapshot:
+                    # User edited the key while verification was in flight.
+                    self._update_deepl_badge(infer_deepl_plan(current_key), "已变更")
+                    show_themed_message(
+                        self,
+                        icon=QMessageBox.Information,
+                        title="DeepL 验证取消",
+                        text="验证完成前 Key 已修改，请重新验证。",
+                        buttons=QMessageBox.Ok,
+                    )
+                    return
+                self.parent.config.set("deepl.api_key", verify_key_snapshot)
                 self.parent.config.set("deepl.account_type", account_type)
                 self._update_deepl_badge(account_type, detail)
                 show_themed_message(
