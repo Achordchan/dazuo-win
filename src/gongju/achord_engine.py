@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import shutil
+import tempfile
 import socket
 import subprocess
 import sys
@@ -41,21 +42,31 @@ def _load_bundled_trust_root() -> dict[str, str]:
         digest = str(manifest.get("sha256") or "").strip().lower()
         if version and digest:
             trusted[version] = digest
-    allowlist_path = os.path.join(_project_root(), "third_party", "deeplx", "trusted_releases.json")
-    try:
-        with open(allowlist_path, "r", encoding="utf-8") as file:
-            data = json.load(file)
-        releases = data.get("releases") if isinstance(data, dict) else None
-        if isinstance(releases, dict):
-            for version, digest in releases.items():
-                version = str(version or "").strip().lstrip("v")
-                digest = str(digest or "").strip().lower()
-                if version and re.fullmatch(r"[0-9a-f]{64}", digest):
-                    trusted[version] = digest
-    except FileNotFoundError:
-        pass
-    except Exception as error:
-        logger.warning("Failed to load DeepLX trust allowlist: %s", error)
+    allowlist_paths = {
+        os.path.normpath(
+            os.path.join(directory, "..", "..", "trusted_releases.json")
+        )
+        for directory in (_bundled_engine_dir(), _dev_engine_dir())
+    }
+    for allowlist_path in allowlist_paths:
+        try:
+            with open(allowlist_path, "r", encoding="utf-8") as file:
+                data = json.load(file)
+            releases = data.get("releases") if isinstance(data, dict) else None
+            if isinstance(releases, dict):
+                for version, digest in releases.items():
+                    version = str(version or "").strip().lstrip("v")
+                    digest = str(digest or "").strip().lower()
+                    if version and re.fullmatch(r"[0-9a-f]{64}", digest):
+                        trusted[version] = digest
+        except FileNotFoundError:
+            continue
+        except Exception as error:
+            logger.warning(
+                "Failed to load DeepLX trust allowlist %s: %s",
+                allowlist_path,
+                error,
+            )
     return trusted
 
 
@@ -71,13 +82,15 @@ def _assert_trusted_engine(path: str, version: str, expected_digest: str = "") -
     trusted = (expected_digest or _expected_engine_digest(version) or "").lower()
     if not trusted:
         raise RuntimeError(
-            f"DeepLX {version} 不在可信版本清单中，请先将其加入 third_party/deeplx/trusted_releases.json。"
+            f"DeepLX {version} 尚未通过当前客户端安全校验，请等待客户端更新后再安装。"
         )
     if digest != trusted:
         raise RuntimeError("DeepLX 文件摘要与可信清单不一致，已拒绝执行。")
     if os.path.getsize(path) > 80 * 1024 * 1024:
         raise RuntimeError("DeepLX 文件体积过大，已拒绝执行。")
     return digest
+
+_ENGINE_DOWNLOAD_LOCK = asyncio.Lock()
 
 _ENGINE_MANAGERS: "weakref.WeakSet[AchordEngineManager]" = weakref.WeakSet()
 
@@ -320,17 +333,17 @@ class AchordEngineLocator:
             if not os.path.isdir(directory) or not os.path.isfile(executable):
                 continue
             manifest = _read_manifest(manifest_path)
-            version = str(manifest.get("version") or name)
-            expected = str(manifest.get("sha256") or "").strip().lower() or _expected_engine_digest(version)
+            version = str(manifest.get("version") or name).strip().lstrip("v")
+            # Only independent allowlist digests are trusted for cache selection.
+            # Never promote a cache entry solely because its own manifest claims a high version/hash.
+            allowlist = _expected_engine_digest(version)
+            if not allowlist:
+                logger.warning("Skip cache engine not in trust allowlist: %s", executable)
+                continue
             try:
-                actual = _assert_trusted_engine(executable, version, expected_digest=expected)
+                actual = _assert_trusted_engine(executable, version, expected_digest=allowlist)
             except Exception as error:
                 logger.warning("Skip untrusted cached engine %s: %s", executable, error)
-                continue
-            # Prefer independent allowlist digest when available.
-            allowlist = _expected_engine_digest(version)
-            if allowlist and actual != allowlist:
-                logger.warning("Skip cache engine with non-allowlisted digest: %s", executable)
                 continue
             candidates.append(
                 AchordEngineInfo(
@@ -451,6 +464,13 @@ class AchordEngineUpdater:
         except Exception:
             return None
 
+    def approved_digest(self, release_or_version) -> str:
+        version = getattr(release_or_version, "version", release_or_version)
+        return _expected_engine_digest(str(version or ""))
+
+    def is_release_approved(self, release: AchordEngineRelease) -> bool:
+        return bool(self.approved_digest(release))
+
     async def check_latest(self) -> AchordEngineRelease:
         asset_name = _asset_name_for_current_platform()
         async with aiohttp.ClientSession(
@@ -477,24 +497,54 @@ class AchordEngineUpdater:
                 )
         raise RuntimeError(f"最新版本未提供 {asset_name}")
 
+    @property
+    def download_in_progress(self) -> bool:
+        return _ENGINE_DOWNLOAD_LOCK.locked()
+
     async def download_latest(
+        self,
+        progress_callback: Optional[Callable[[int], None]] = None,
+    ) -> AchordEngineInfo:
+        if _ENGINE_DOWNLOAD_LOCK.locked():
+            raise RuntimeError("DeepLX 更新正在进行，请勿重复操作。")
+        async with _ENGINE_DOWNLOAD_LOCK:
+            return await self._download_latest_locked(progress_callback)
+
+
+    async def _download_latest_locked(
         self,
         progress_callback: Optional[Callable[[int], None]] = None,
     ) -> AchordEngineInfo:
         release = await self.check_latest()
         current = self.current_engine_info()
+        # Only skip download when the currently selected engine is already trusted
+        # and not older than the remote release. Unknown high-version cache must not
+        # block recovery of a bundled/allowlisted engine.
         if current and compare_versions(release.version, current.version) <= 0:
-            if progress_callback:
-                progress_callback(100)
-            return current
+            try:
+                _assert_trusted_engine(current.executable_path, current.version)
+                if progress_callback:
+                    progress_callback(100)
+                return current
+            except Exception as error:
+                logger.warning(
+                    "Current engine cannot be reused for download skip (%s); continue downloading %s",
+                    error,
+                    release.version,
+                )
+
+        expected_digest = self.approved_digest(release)
+        if not expected_digest:
+            raise RuntimeError(
+                f"DeepLX {release.version} 尚未通过当前客户端安全校验，请等待客户端更新后再安装。"
+            )
 
         root = _engine_cache_root()
         os.makedirs(root, exist_ok=True)
 
         safe_version = release.version or release.tag_name.lstrip("v") or str(int(time.time()))
-        staging_dir = os.path.join(root, f"_download_{safe_version}_{int(time.time())}")
+        staging_dir = tempfile.mkdtemp(prefix=f"_download_{safe_version}_", dir=root)
         target_dir = os.path.join(root, safe_version)
-        os.makedirs(staging_dir, exist_ok=True)
         temp_exe = os.path.join(staging_dir, ENGINE_EXE_NAME)
         manifest_path = os.path.join(staging_dir, "manifest.json")
 
@@ -504,11 +554,6 @@ class AchordEngineUpdater:
                 timeout=self._timeout,
                 trust_env=True,
             ) as session:
-                expected_digest = _expected_engine_digest(safe_version)
-                if not expected_digest:
-                    raise RuntimeError(
-                        f"DeepLX {safe_version} 不在可信版本清单中，请先将其加入 third_party/deeplx/trusted_releases.json 后再下载。"
-                    )
                 async with session.get(release.download_url) as response:
                     if response.status != 200:
                         raise RuntimeError(f"引擎下载失败: HTTP {response.status}")
@@ -531,7 +576,7 @@ class AchordEngineUpdater:
             if not os.path.isfile(temp_exe) or os.path.getsize(temp_exe) < 1024:
                 raise RuntimeError("下载的引擎文件无效")
 
-            digest = _assert_trusted_engine(temp_exe, safe_version)
+            digest = _assert_trusted_engine(temp_exe, safe_version, expected_digest=expected_digest)
             manifest = {
                 "name": ENGINE_VENDOR,
                 "version": safe_version,

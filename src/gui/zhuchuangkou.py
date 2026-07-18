@@ -363,43 +363,41 @@ class ZhuChuangKou(QMainWindow):
     
     def _create_ui(self):
         """创建界面"""
-        # 创建主部件
         main_widget = QWidget()
         main_widget.setObjectName("centralWidget")
         self.setCentralWidget(main_widget)
-        
-        # 创建主布局
+
         main_layout = QVBoxLayout(main_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
-        # 添加自定义标题栏
+
         self.biaotilan = BiaoTiLan(self)
         main_layout.addWidget(self.biaotilan)
-        
-        # 创建内容区域
+
         content_widget = QWidget()
+        content_widget.setObjectName('mainContent')
         content_layout = QVBoxLayout(content_widget)
-        content_layout.setContentsMargins(20, 10, 20, 20)
-        content_layout.setSpacing(15)
-        
-        # 创建语言与服务区域（同一行）
-        header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(10)
-        
-        # 源语言选择
+        content_layout.setContentsMargins(14, 10, 14, 14)
+        content_layout.setSpacing(12)
+
+        toolbar = QFrame()
+        toolbar.setObjectName('translationToolbar')
+        toolbar.setFixedHeight(58)
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(10, 8, 10, 8)
+        toolbar_layout.setSpacing(8)
+
         source_container = QFrame()
-        source_container.setObjectName("langPill")
+        source_container.setObjectName('langPill')
         source_container.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
         source_layout = QHBoxLayout(source_container)
-        source_layout.setContentsMargins(10, 4, 10, 4)
+        source_layout.setContentsMargins(10, 4, 8, 4)
         source_layout.setSpacing(6)
-        source_label = QLabel("源语言")
-        source_label.setObjectName("langPillLabel")
+        source_label = QLabel('源语言')
+        source_label.setObjectName('langPillLabel')
         source_layout.addWidget(source_label)
         self.source_lang_combo = SearchableComboBox()
-        self.source_lang_combo.setObjectName("langComboPill")
+        self.source_lang_combo.setObjectName('langComboPill')
         self.source_lang_combo.set_items([
             "自动检测",
             "简体中文", "繁体中文", "英语", "日语", "韩语", "法语",
@@ -409,34 +407,34 @@ class ZhuChuangKou(QMainWindow):
         self.source_lang_combo.setCurrentIndex(0)
         self.source_lang_combo.currentIndexChanged.connect(self._on_source_lang_changed)
         source_layout.addWidget(self.source_lang_combo)
-        source_chevron = QLabel("▾")
-        source_chevron.setObjectName("langPillChevron")
-        source_layout.addWidget(source_chevron)
-        header_layout.addWidget(source_container)
-        
-        # 添加互转按钮
+        self.source_chevron = QLabel()
+        self.source_chevron.setObjectName('langPillChevron')
+        self.source_chevron.setFixedSize(12, 12)
+        source_layout.addWidget(self.source_chevron)
+        toolbar_layout.addWidget(source_container)
+
         self.switch_button = QPushButton()
-        self.switch_button.setObjectName("langSwitchButton")
+        self.switch_button.setObjectName('langSwitchButton')
         self.switch_button.setIcon(themed_icon("switch", self.config.get("theme", "dark"), "primary"))
-        self.switch_button.setToolTip("互换语言")
-        self.switch_button.setFixedSize(28, 28)
-        self.switch_button.setIconSize(QSize(24, 24))
+        self.switch_button.setToolTip('互换语言')
+        self.switch_button.setFixedSize(34, 34)
+        self.switch_button.setIconSize(QSize(17, 17))
         self.switch_button.clicked.connect(self._switch_languages)
-        self.switch_button.setEnabled(False)  # 初始状态用
-        header_layout.addWidget(self.switch_button)
-        
-        # 目标语言选择
+        self.switch_button.setEnabled(False)
+        self.switch_button.setCursor(Qt.PointingHandCursor)
+        toolbar_layout.addWidget(self.switch_button)
+
         target_container = QFrame()
-        target_container.setObjectName("langPill")
+        target_container.setObjectName('langPill')
         target_container.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
         target_layout = QHBoxLayout(target_container)
-        target_layout.setContentsMargins(10, 4, 10, 4)
+        target_layout.setContentsMargins(10, 4, 8, 4)
         target_layout.setSpacing(6)
-        target_label = QLabel("目标语言")
-        target_label.setObjectName("langPillLabel")
+        target_label = QLabel('目标语言')
+        target_label.setObjectName('langPillLabel')
         target_layout.addWidget(target_label)
         self.target_lang_combo = SearchableComboBox()
-        self.target_lang_combo.setObjectName("langComboPill")
+        self.target_lang_combo.setObjectName('langComboPill')
         self.target_lang_combo.set_items([
             "简体中文", "繁体中文", "英语", "日语", "韩语", "法语",
             "德语", "西班牙语", "俄语", "意大利语", "葡萄牙语",
@@ -444,71 +442,157 @@ class ZhuChuangKou(QMainWindow):
         ])
         self.target_lang_combo.currentIndexChanged.connect(self._on_target_lang_changed)
         target_layout.addWidget(self.target_lang_combo)
-        target_chevron = QLabel("▾")
-        target_chevron.setObjectName("langPillChevron")
-        target_layout.addWidget(target_chevron)
-        header_layout.addWidget(target_container)
-        
-        # 翻译服务状态区
+        self.target_chevron = QLabel()
+        self.target_chevron.setObjectName('langPillChevron')
+        self.target_chevron.setFixedSize(12, 12)
+        target_layout.addWidget(self.target_chevron)
+        toolbar_layout.addWidget(target_container)
+
         service_container = QFrame()
-        service_container.setObjectName("serviceStatusPill")
+        service_container.setObjectName('serviceStatusPill')
         service_container.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
         service_layout = QHBoxLayout(service_container)
         service_layout.setContentsMargins(10, 4, 10, 4)
         service_layout.setSpacing(6)
-        service_label = QLabel("翻译服务")
-        service_label.setObjectName("serviceStatusLabel")
+        service_label = QLabel('翻译服务')
+        service_label.setObjectName('serviceStatusLabel')
         service_layout.addWidget(service_label)
-        service_sparkle = QLabel("✦")
-        service_sparkle.setObjectName("serviceSparkle")
-        service_layout.addWidget(service_sparkle)
+        self.service_icon_label = QLabel()
+        self.service_icon_label.setObjectName('serviceIconLabel')
+        self.service_icon_label.setFixedSize(16, 16)
+        service_layout.addWidget(self.service_icon_label)
         self.service_display = QLabel("")
-        self.service_display.setObjectName("serviceNameLabel")
+        self.service_display.setObjectName('serviceNameLabel')
         service_layout.addWidget(self.service_display)
         self.status_indicator = ZhuangTaiZhiShiQi(compact=True)
         self.status_indicator.retry_button.clicked.connect(self._retry_connection)
         service_layout.addWidget(self.status_indicator)
-        header_layout.addWidget(service_container)
-        
-        header_layout.addStretch()
-        content_layout.addLayout(header_layout)
-        
-        # 添加
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        content_layout.addWidget(separator)
-        
-        # 创建右布局的文本区域
-        text_layout = QHBoxLayout()
-        text_layout.setSpacing(20)
-        
-        # 左侧输入区域
+        toolbar_layout.addWidget(service_container)
+        toolbar_layout.addStretch()
+
+        def create_toolbar_button(icon_name, tooltip, callback):
+            button = QPushButton()
+            button.setObjectName('toolbarIconButton')
+            button.setFixedSize(34, 34)
+            button.setIcon(themed_icon(icon_name, self.config.get('theme', 'dark'), 'secondary'))
+            button.setIconSize(QSize(16, 16))
+            button.setToolTip(tooltip)
+            button.setCursor(Qt.PointingHandCursor)
+            button.clicked.connect(callback)
+            return button
+
+        self.toolbar_theme_button = create_toolbar_button('theme', '切换主题', self._on_theme_change)
+        self.toolbar_mini_button = create_toolbar_button(
+            'mini_mode',
+            '切换到迷你窗口模式',
+            lambda: self._toggle_mini_mode(True, show_hint=True),
+        )
+        self.toolbar_settings_button = create_toolbar_button('settings', '设置', self._on_settings)
+        toolbar_layout.addWidget(self.toolbar_theme_button)
+        toolbar_layout.addWidget(self.toolbar_mini_button)
+        toolbar_layout.addWidget(self.toolbar_settings_button)
+        content_layout.addWidget(toolbar)
+
+        workspace = QWidget()
+        workspace.setObjectName('translationWorkspace')
+        self.translation_workspace_layout = QHBoxLayout(workspace)
+        self.translation_workspace_layout.setContentsMargins(0, 0, 0, 0)
+        self.translation_workspace_layout.setSpacing(12)
+
+        self.source_panel = QFrame()
+        self.source_panel.setObjectName('translationPanel')
+        source_panel_layout = QVBoxLayout(self.source_panel)
+        source_panel_layout.setContentsMargins(0, 0, 0, 0)
+        source_panel_layout.setSpacing(0)
+
+        source_header = QFrame()
+        source_header.setObjectName('translationPanelHeader')
+        source_header.setFixedHeight(42)
+        source_header_layout = QHBoxLayout(source_header)
+        source_header_layout.setContentsMargins(14, 0, 10, 0)
+        source_header_layout.setSpacing(8)
+        self.source_panel_icon = QLabel()
+        self.source_panel_icon.setObjectName('translationPanelIcon')
+        self.source_panel_icon.setFixedSize(16, 16)
+        source_header_layout.addWidget(self.source_panel_icon)
+        source_title = QLabel('原文')
+        source_title.setObjectName('translationPanelTitle')
+        source_header_layout.addWidget(source_title)
+        source_header_layout.addStretch()
+        self.clear_source_button = QPushButton()
+        self.clear_source_button.setObjectName('panelActionButton')
+        self.clear_source_button.setFixedSize(30, 30)
+        self.clear_source_button.setIconSize(QSize(15, 15))
+        self.clear_source_button.setToolTip('清空原文')
+        self.clear_source_button.setCursor(Qt.PointingHandCursor)
+        self.clear_source_button.setEnabled(False)
+        source_header_layout.addWidget(self.clear_source_button)
+        source_panel_layout.addWidget(source_header)
+
         self.input_text = ShuRuKuang("在此输入要翻译的文本...")
+        self.input_text.setObjectName('sourceTextEdit')
+        self.input_text.setMinimumHeight(0)
+        self.input_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.input_text.textChanged.connect(self._vm_on_input_text_changed)
-        text_layout.addWidget(self.input_text)
-        
-        # 右侧输出区域
-        output_container = QWidget()
-        output_layout = QVBoxLayout(output_container)
-        output_layout.setContentsMargins(0, 0, 0, 0)
-        output_layout.setSpacing(0)
+        self.input_text.textChanged.connect(
+            lambda: self.clear_source_button.setEnabled(bool(self.input_text.toPlainText().strip()))
+        )
+        self.clear_source_button.clicked.connect(self.input_text.clear)
+        source_panel_layout.addWidget(self.input_text, 1)
+
+        self.target_panel = QFrame()
+        self.target_panel.setObjectName('translationPanel')
+        target_panel_layout = QVBoxLayout(self.target_panel)
+        target_panel_layout.setContentsMargins(0, 0, 0, 0)
+        target_panel_layout.setSpacing(0)
+
+        target_header = QFrame()
+        target_header.setObjectName('translationPanelHeader')
+        target_header.setFixedHeight(42)
+        target_header_layout = QHBoxLayout(target_header)
+        target_header_layout.setContentsMargins(14, 0, 10, 0)
+        target_header_layout.setSpacing(8)
+        self.target_panel_icon = QLabel()
+        self.target_panel_icon.setObjectName('translationPanelIcon')
+        self.target_panel_icon.setFixedSize(16, 16)
+        target_header_layout.addWidget(self.target_panel_icon)
+        target_title = QLabel('译文')
+        target_title.setObjectName('translationPanelTitle')
+        target_header_layout.addWidget(target_title)
+        target_header_layout.addStretch()
+        self.copy_translation_button = QPushButton()
+        self.copy_translation_button.setObjectName('panelActionButton')
+        self.copy_translation_button.setFixedSize(30, 30)
+        self.copy_translation_button.setIconSize(QSize(15, 15))
+        self.copy_translation_button.setToolTip('复制译文')
+        self.copy_translation_button.setCursor(Qt.PointingHandCursor)
+        self.copy_translation_button.setEnabled(False)
+        target_header_layout.addWidget(self.copy_translation_button)
+        target_panel_layout.addWidget(target_header)
 
         self.output_text = ShuChuKuang()
-        output_layout.addWidget(self.output_text)
+        self.output_text.setObjectName('targetTextEdit')
+        self.output_text.setMinimumHeight(0)
+        self.output_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.output_text.set_header_copy_button_mode(True)
+        self.output_text.textChanged.connect(
+            lambda: self.copy_translation_button.setEnabled(
+                bool(self.output_text.toPlainText().strip()) and not self.output_text._is_loading
+            )
+        )
+        self.copy_translation_button.clicked.connect(self.output_text._on_copy)
+        target_panel_layout.addWidget(self.output_text, 1)
 
         self.ai_status_bar = AITranslatingStatusBar()
-        output_layout.addWidget(self.ai_status_bar)
+        target_panel_layout.addWidget(self.ai_status_bar)
 
-        text_layout.addWidget(output_container)
-        
-        # 置右域比例为1:1
-        text_layout.setStretch(0, 1)  # 输入区域
-        text_layout.setStretch(1, 1)  # 输出区域
-        
-        content_layout.addLayout(text_layout)
-        main_layout.addWidget(content_widget)
-        
-        # 加载默认设置
+        self.translation_workspace_layout.addWidget(self.source_panel, 1)
+        self.translation_workspace_layout.addWidget(self.target_panel, 1)
+        self.translation_workspace_layout.setStretch(0, 1)
+        self.translation_workspace_layout.setStretch(1, 1)
+        content_layout.addWidget(workspace, 1)
+        main_layout.addWidget(content_widget, 1)
+
         self._load_default_settings()
     
     def _load_default_settings(self):
@@ -913,54 +997,6 @@ class ZhuChuangKou(QMainWindow):
         # 当主窗口显示时，关闭Mini模式
         if self.is_mini_mode:
             self.set_mini_mode(False)
-    
-    async def _handle_mini_text_changed(self):
-        """处理Mini窗口的文本变化"""
-        if not self.mini_window:
-            return
-
-        input_widget = getattr(self.mini_window, "input_text", None)
-        if input_widget is None or not hasattr(input_widget, "toPlainText"):
-            return
-
-        text = input_widget.toPlainText().strip()
-        if not text:
-            self.mini_window.output_text.clear()
-            return
-        
-        try:
-            # 开始翻译动画
-            self.mini_window.start_loading()
-            
-            # 获取翻译结果
-            context = self._get_vm_context()
-            result = await self.fanyi.fanyi(
-                text,
-                source_lang="auto",
-                target_lang=context.target_lang,
-                expected_api_name=context.api_name,
-                expected_api_generation=context.api_generation,
-            )
-            
-            # 处理可能的元组结果
-            if isinstance(result, tuple):
-                result_text = result[0]  # 获取元组中的第一个元素
-            else:
-                result_text = result
-            
-            # 显示翻译结果
-            self.mini_window.stop_loading()
-            self.mini_window.set_output_text(result_text)
-            
-            # 调整窗口大小
-            self.mini_window._adjust_window_size()
-            
-            logger.info(f"Mini窗口翻译完成: {text} -> {result_text[:50]}...")
-            
-        except Exception as e:
-            logger.error(f"Mini窗口翻译失败: {e}")
-            self.mini_window.stop_loading()
-            self.mini_window.set_output_text("翻译失败，请重试")
     
     def _toggle_mini_mode(self, checked, show_hint=True):
         self.set_mini_mode(checked, show_hint=show_hint)

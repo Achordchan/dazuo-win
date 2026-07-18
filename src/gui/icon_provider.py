@@ -20,6 +20,10 @@ except Exception as error:  # pragma: no cover - fallback for environments witho
 
 
 ICON_MAP = {
+    'clear': 'fa6s.trash-can',
+    'source_text': 'fa6s.align-left',
+    'translation': 'fa6s.language',
+    'chevron_down': 'fa6s.chevron-down',
     "app": "fa6s.language",
     "about": "fa6s.circle-info",
     "author": "fa6s.user",
@@ -42,6 +46,8 @@ ICON_MAP = {
 }
 
 FALLBACK_SVG = {
+    'source_text': 'ai.svg',
+    'translation': 'ai.svg',
     "app": "ai.svg",
     "about": "info.svg",
     "author": "about-author.svg",

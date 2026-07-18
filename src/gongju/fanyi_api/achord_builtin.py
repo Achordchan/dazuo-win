@@ -99,7 +99,10 @@ class AchordBuiltinAPI(FanYiJieKou):
         if remaining <= 0:
             return
         seconds = max(1, int(math.ceil(remaining)))
-        raise ValueError(f"Achord 内置引擎请求过于频繁，请 {seconds} 秒后再试")
+        raise ValueError(
+            f"Achord 内置引擎请求过于频繁，请 {seconds} 秒后再试；"
+            "也可切换到 Google、DeepL 或 AI 翻译继续使用"
+        )
 
     @staticmethod
     def _looks_like_rate_limit(status: Optional[int], message: str) -> bool:
@@ -189,7 +192,7 @@ class AchordBuiltinAPI(FanYiJieKou):
                             seconds = max(1, int(math.ceil(wait_s)))
                             raise ValueError(
                                 f"Achord 内置引擎请求过于频繁（HTTP {response.status}），"
-                                f"已暂停 {seconds} 秒，请稍后再试"
+                                f"已暂停 {seconds} 秒；也可切换到 Google、DeepL 或 AI 翻译"
                             )
                         raise ValueError(
                             f"Achord 内置引擎翻译失败: HTTP {response.status} {message}".strip()
@@ -201,7 +204,7 @@ class AchordBuiltinAPI(FanYiJieKou):
                             wait_s = self.note_rate_limited()
                             seconds = max(1, int(math.ceil(wait_s)))
                             raise ValueError(
-                                f"Achord 内置引擎请求过于频繁，已暂停 {seconds} 秒，请稍后再试"
+                                f"Achord 内置引擎请求过于频繁，已暂停 {seconds} 秒；也可切换到 Google、DeepL 或 AI 翻译"
                             )
                         raise ValueError(f"Achord 内置引擎翻译失败: {code} {message}".strip())
 

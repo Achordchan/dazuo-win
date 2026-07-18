@@ -367,6 +367,8 @@ class SheZhiChuangKou(QDialog):
         service_layout.addWidget(self.deepl_settings_group)
 
         self.achord_engine_updater = AchordEngineUpdater()
+        self._last_achord_release_approved = False
+        self._achord_engine_update_active = False
         self.achord_engine_group = QGroupBox("Achord 内置引擎")
         achord_layout = QVBoxLayout()
         achord_layout.setSpacing(14)
@@ -383,6 +385,7 @@ class SheZhiChuangKou(QDialog):
         self.achord_engine_check_button.clicked.connect(self._on_check_achord_engine_clicked)
         self.achord_engine_update_button = QPushButton("更新引擎")
         self.achord_engine_update_button.setFixedHeight(32)
+        self.achord_engine_update_button.setEnabled(False)
         self.achord_engine_update_button.clicked.connect(self._on_update_achord_engine_clicked)
         achord_button_row.addWidget(self.achord_engine_check_button)
         achord_button_row.addWidget(self.achord_engine_update_button)
@@ -686,6 +689,13 @@ class SheZhiChuangKou(QDialog):
             updates["openai_compat.model"] = self.model_input.text().strip()
             updates["openai_compat.api_key"] = self.api_key_input.text().strip()
 
+            # Preserve the target service before writing unverified form values.
+            from src.gui.translator_controller import ensure_translation_rollback_snapshot
+
+            updates["translation.last_working_configs"] = (
+                ensure_translation_rollback_snapshot(self.parent.config, api_name)
+            )
+
             previous_auto_start = self.parent.config.get("auto_start")
             previous_show_in_dock = self.parent.config.get("show_in_dock", True)
 
@@ -803,7 +813,64 @@ class SheZhiChuangKou(QDialog):
             text = f"{text} · {extra}"
         self.achord_engine_status.setText(text)
 
+    def _set_achord_engine_update_active(self, active: bool):
+        self._achord_engine_update_active = bool(active)
+        self.achord_engine_check_button.setEnabled(not active)
+        self.achord_engine_update_button.setEnabled(
+            bool(self._last_achord_release_approved) and not active
+        )
+
+
+    def _handle_achord_engine_check_result(self, latest, current_version: str):
+        if self._achord_engine_update_active:
+            return
+        if compare_versions(latest.version, current_version) <= 0:
+            self._last_achord_release_approved = False
+            self.achord_engine_update_button.setEnabled(False)
+            self._refresh_achord_engine_status("已是最新")
+            show_themed_message(
+                self,
+                icon=QMessageBox.Information,
+                title="引擎已是最新",
+                text=f"当前 Achord 内置引擎已是最新版本 v{current_version}。",
+                buttons=QMessageBox.Ok,
+            )
+            return
+
+        approved = self.achord_engine_updater.is_release_approved(latest)
+        self._last_achord_release_approved = approved
+        self.achord_engine_update_button.setEnabled(approved)
+        if approved:
+            self._refresh_achord_engine_status(f"发现 v{latest.version}")
+            show_themed_message(
+                self,
+                icon=QMessageBox.Information,
+                title="发现引擎更新",
+                text=f"检测到 Achord 内置引擎 v{latest.version}，可点击“更新引擎”安装。",
+                buttons=QMessageBox.Ok,
+            )
+            return
+
+        self._refresh_achord_engine_status(
+            f"发现 v{latest.version} · 等待客户端适配"
+        )
+        show_themed_message(
+            self,
+            icon=QMessageBox.Information,
+            title="发现引擎新版本",
+            text=(
+                f"检测到 DeepLX v{latest.version}，但尚未通过当前客户端安全校验。"
+                "请等待客户端适配后再安装。"
+            ),
+            buttons=QMessageBox.Ok,
+        )
+
+
     def _on_check_achord_engine_clicked(self):
+        if self._achord_engine_update_active:
+            return
+        self._last_achord_release_approved = False
+        self.achord_engine_update_button.setEnabled(False)
         self.achord_engine_check_button.setEnabled(False)
         self.achord_engine_check_button.setText("检测中...")
         self._refresh_achord_engine_status("检测中")
@@ -813,25 +880,10 @@ class SheZhiChuangKou(QDialog):
                 latest = await self.achord_engine_updater.check_latest()
                 current = self.achord_engine_updater.current_engine_info()
                 current_version = current.version if current else "0.0.0"
-                if compare_versions(latest.version, current_version) > 0:
-                    self._refresh_achord_engine_status(f"发现 v{latest.version}")
-                    show_themed_message(
-                        self,
-                        icon=QMessageBox.Information,
-                        title="发现引擎更新",
-                        text=f"检测到 Achord 内置引擎 v{latest.version}，可点击“更新引擎”安装。",
-                        buttons=QMessageBox.Ok,
-                    )
-                else:
-                    self._refresh_achord_engine_status("已是最新")
-                    show_themed_message(
-                        self,
-                        icon=QMessageBox.Information,
-                        title="引擎已是最新",
-                        text=f"当前 Achord 内置引擎已是最新版本 v{current_version}。",
-                        buttons=QMessageBox.Ok,
-                    )
+                self._handle_achord_engine_check_result(latest, current_version)
             except Exception as e:
+                self._last_achord_release_approved = False
+                self.achord_engine_update_button.setEnabled(False)
                 self._refresh_achord_engine_status("检测失败")
                 show_themed_message(
                     self,
@@ -841,13 +893,25 @@ class SheZhiChuangKou(QDialog):
                     buttons=QMessageBox.Ok,
                 )
             finally:
-                self.achord_engine_check_button.setEnabled(True)
+                self.achord_engine_check_button.setEnabled(not self._achord_engine_update_active)
                 self.achord_engine_check_button.setText("检测更新")
 
         asyncio.get_event_loop().create_task(check())
 
     def _on_update_achord_engine_clicked(self):
-        self.achord_engine_update_button.setEnabled(False)
+        if self._achord_engine_update_active:
+            return
+        if not self._last_achord_release_approved:
+            self._refresh_achord_engine_status("等待客户端适配")
+            show_themed_message(
+                self,
+                icon=QMessageBox.Information,
+                title="暂不可安装",
+                text="该 DeepLX 版本尚未通过当前客户端安全校验，请等待客户端适配。",
+                buttons=QMessageBox.Ok,
+            )
+            return
+        self._set_achord_engine_update_active(True)
         self.achord_engine_update_button.setText("更新中...")
         self._refresh_achord_engine_status("下载中")
 
@@ -857,6 +921,7 @@ class SheZhiChuangKou(QDialog):
         async def update():
             try:
                 info = await self.achord_engine_updater.download_latest(progress_callback=progress)
+                self._last_achord_release_approved = False
                 self._refresh_achord_engine_status("更新完成")
                 if self.parent.config.get("translation.api", "google") == "achord_builtin":
                     self.parent.reload_translation_api()
@@ -877,7 +942,7 @@ class SheZhiChuangKou(QDialog):
                     buttons=QMessageBox.Ok,
                 )
             finally:
-                self.achord_engine_update_button.setEnabled(True)
+                self._set_achord_engine_update_active(False)
                 self.achord_engine_update_button.setText("更新引擎")
 
         asyncio.get_event_loop().create_task(update())

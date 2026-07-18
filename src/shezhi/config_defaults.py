@@ -60,6 +60,7 @@ DEFAULT_CONFIG = {
         "api": "google",
         "source_lang": "自动检测",
         "target_lang": "简体中文",
+        "last_working_configs": {},
     },
     "deepl": {
         "api_key": "",

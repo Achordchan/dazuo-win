@@ -122,6 +122,7 @@ class UpdateCoordinator:
         self._update_error_occurred = False
         self._modal_dialog_active = False
         self._pending_update_prompt = None
+        self._update_operation_active = False
 
         self.updater.update_available.connect(self.on_update_available)
         self.updater.update_progress.connect(self.on_update_progress)
@@ -223,7 +224,7 @@ class UpdateCoordinator:
             self._flush_pending_update_prompt()
 
     def check_update(self, show_no_update_message: bool = False):
-        if self._update_checking:
+        if self._update_checking or self._update_operation_active:
             return
         self._update_checking = True
         self._update_error_occurred = False
@@ -246,13 +247,19 @@ class UpdateCoordinator:
             self._pending_update_prompt = (version, notes, force_update)
             return
 
-        self._show_update_prompt(version, notes, force_update)
+        self._handle_update_available(version, notes, force_update)
 
     def _flush_pending_update_prompt(self):
         if self._modal_dialog_active or not self._pending_update_prompt:
             return
         version, notes, force_update = self._pending_update_prompt
         self._pending_update_prompt = None
+        self._handle_update_available(version, notes, force_update)
+
+    def _handle_update_available(self, version, notes, force_update):
+        if getattr(self.updater, "force_update_requested", False):
+            self._start_update_download()
+            return
         self._show_update_prompt(version, notes, force_update)
 
     def _show_update_prompt(self, version, notes, force_update):
@@ -263,8 +270,7 @@ class UpdateCoordinator:
         finally:
             self._modal_dialog_active = False
         if result == QDialog.Accepted:
-            self._ensure_progress_dialog()
-            asyncio.get_event_loop().create_task(self.updater.download_update())
+            self._start_update_download()
             self._flush_pending_update_prompt()
             return
 
@@ -284,6 +290,7 @@ class UpdateCoordinator:
             self.progress_dialog.set_progress(progress)
 
     def on_update_error(self, error):
+        self._update_operation_active = False
         self._update_error_occurred = True
         show_themed_message(
             self.owner,
@@ -325,7 +332,7 @@ class UpdateCoordinator:
                     informative_text="请手动将应用替换为新版本后重新启动。",
                     buttons=QMessageBox.Ok,
                 )
-                self.updater.install_update(file_path)
+                self._install_non_windows_update(file_path)
                 return
 
         if sys.platform == "darwin":
@@ -340,9 +347,10 @@ class UpdateCoordinator:
                 primary_button=QMessageBox.Ok,
             )
             if reply == QMessageBox.Ok:
-                self.updater.install_update(file_path)
+                self._install_non_windows_update(file_path)
             else:
                 self.updater.discard_downloaded_update(file_path)
+                self._update_operation_active = False
             return
 
         show_themed_message(
@@ -353,14 +361,34 @@ class UpdateCoordinator:
             buttons=QMessageBox.Ok,
         )
         self.updater.discard_downloaded_update(file_path)
+        self._update_operation_active = False
+
+    def _start_update_download(self):
+        if self._update_operation_active or getattr(self.updater, "download_in_progress", False):
+            return
+        self._update_operation_active = True
+        self._ensure_progress_dialog()
+        asyncio.get_event_loop().create_task(self.updater.download_update())
+
+    def _install_non_windows_update(self, file_path: str):
+        try:
+            self.updater.install_update(file_path)
+        except Exception as error:
+            logger.error("安装更新失败: %s", error)
+            self.on_update_error(f"安装更新失败: {error}")
+        finally:
+            self._update_operation_active = False
 
     async def _install_windows_update(self, file_path: str):
         try:
             await self._prepare_owner_for_update()
             self.updater.install_update(file_path)
         except Exception as error:
-            logger.error(f"安装 Windows 更新前清理失败: {error}")
+            logger.error(f"安装 Windows 更新失败: {error}")
+            await self._restore_owner_after_failed_update()
             self.on_update_error(f"安装更新失败: {error}")
+        finally:
+            self._update_operation_active = False
 
     async def _prepare_owner_for_update(self):
         if hasattr(self.owner, "translator_vm"):
@@ -382,6 +410,23 @@ class UpdateCoordinator:
         fanyi = getattr(self.owner, "fanyi", None)
         if fanyi and hasattr(fanyi, "close_current_api"):
             await asyncio.wait_for(fanyi.close_current_api(), timeout=8)
+
+    async def _restore_owner_after_failed_update(self):
+        # install_update may fail after translation APIs were closed.
+        # Bring the previously selected service back so the app remains usable.
+        owner = self.owner
+        try:
+            if hasattr(owner, "reload_translation_api"):
+                owner.reload_translation_api()
+                task = getattr(owner, "_init_translation_api_task", None)
+                if task is not None:
+                    await asyncio.wait_for(task, timeout=15)
+                return
+            if hasattr(owner, "_init_translation_api"):
+                task = asyncio.get_event_loop().create_task(owner._init_translation_api())
+                await asyncio.wait_for(task, timeout=15)
+        except Exception as error:
+            logger.warning(f"安装失败后恢复翻译服务失败: {error}")
 
     def _ensure_progress_dialog(self):
         if self.progress_dialog is None:

@@ -161,6 +161,32 @@ create-dmg \
 dazuofanyiguan.dmg
 ```
 
+创建 DMG 后生成 macOS 更新签名：
+```bash
+version=$(python -c "from src.version import APP_VERSION; print(APP_VERSION)")
+python tools/sign_windows_update_package.py \
+  dazuofanyiguan.dmg \
+  --version "$version" \
+  --platform macos \
+  --package-type macos_dmg_update \
+  --private-key "$DZFYQ_UPDATE_PRIVATE_KEY"
+```
+
+使用客户端内置公钥复核刚生成的签名：
+```bash
+signature=$(python -c 'import json; print(json.load(open("dazuofanyiguan.dmg.sig.json", encoding="utf-8"))["signature"])')
+python tools/verify_update_signature.py \
+  dazuofanyiguan.dmg \
+  --version "$version" \
+  --signature "$signature" \
+  --filename dazuofanyiguan.dmg \
+  --platform macos \
+  --package-type macos_dmg_update \
+  --print-sha256
+```
+
+只有出现 signature-ok 后，才能将输出的 DZFYQ-SIG-MACOS:<base64> 标记写入对应的 Gitee Release 更新说明。
+
 ---
 
 ## 3. 在线更新流程（当前实现）

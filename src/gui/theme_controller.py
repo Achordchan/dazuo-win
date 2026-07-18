@@ -112,6 +112,38 @@ def update_button_icons(self, theme_name):
         if hasattr(self, "switch_button"):
             self.switch_button.setIcon(themed_icon("switch", theme_name, "primary"))
 
+        toolbar_icons = (
+            ('toolbar_theme_button', 'theme'),
+            ('toolbar_mini_button', 'mini_mode'),
+            ('toolbar_settings_button', 'settings'),
+        )
+        for attribute, icon_name in toolbar_icons:
+            button = getattr(self, attribute, None)
+            if button is not None:
+                button.setIcon(themed_icon(icon_name, theme_name, 'secondary'))
+
+        for attribute in ('source_chevron', 'target_chevron'):
+            label = getattr(self, attribute, None)
+            if label is not None:
+                label.setPixmap(themed_icon('chevron_down', theme_name, 'secondary').pixmap(12, 12))
+
+        if hasattr(self, 'service_icon_label'):
+            self.service_icon_label.setPixmap(
+                themed_icon('translation', theme_name, 'primary').pixmap(15, 15)
+            )
+        if hasattr(self, 'source_panel_icon'):
+            self.source_panel_icon.setPixmap(
+                themed_icon('source_text', theme_name, 'secondary').pixmap(15, 15)
+            )
+        if hasattr(self, 'target_panel_icon'):
+            self.target_panel_icon.setPixmap(
+                themed_icon('translation', theme_name, 'primary').pixmap(15, 15)
+            )
+        if hasattr(self, 'clear_source_button'):
+            self.clear_source_button.setIcon(themed_icon('clear', theme_name, 'secondary'))
+        if hasattr(self, 'copy_translation_button'):
+            self.copy_translation_button.setIcon(themed_icon('copy', theme_name, 'secondary'))
+
         if hasattr(self, 'output_text') and hasattr(self.output_text, 'copy_button'):
             self.output_text.copy_button.setIcon(themed_icon("copy", theme_name))
 
@@ -119,6 +151,10 @@ def update_button_icons(self, theme_name):
             self.output_text.ai_info_button.setIcon(themed_icon("info", theme_name))
         if hasattr(self, 'ai_status_bar') and hasattr(self.ai_status_bar, 'info_button'):
             self.ai_status_bar.info_button.setIcon(themed_icon("info", theme_name))
+        if hasattr(self, 'ai_status_bar') and hasattr(self.ai_status_bar, 'sparkles'):
+            self.ai_status_bar.sparkles.setPixmap(
+                themed_icon('translation', theme_name, 'primary').pixmap(14, 14)
+            )
 
         if hasattr(self, 'biaotilan') and hasattr(self.biaotilan, 'apply_icons'):
             self.biaotilan.apply_icons(theme_name)

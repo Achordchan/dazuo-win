@@ -41,9 +41,12 @@ class TranslatorViewModel(QObject):
         self._debounce_ms = 380
         # Free local engines (DeepLX/Achord) are easy to hammer while typing.
         self._achord_debounce_ms = 900
-        # After HTTP 429, hold new auto-translations for this many seconds.
-        self._rate_limit_cooldown_s = 60.0
-        self._rate_limit_until = 0.0
+        # AI-only short cooldown. Never shared with Google/DeepL/Achord.
+        self._ai_rate_limit_cooldown_s = 2.0
+        self._ai_rate_limit_until = 0.0
+        # Public Google/DeepL endpoints also need their own cooldown after 429.
+        self._remote_rate_limit_cooldown_s = 60.0
+        self._remote_rate_limit_until: dict[str, float] = {}
 
         self._translation_task: Optional[asyncio.Task] = None
         self._token_counter = 0
@@ -78,8 +81,8 @@ class TranslatorViewModel(QObject):
         self._input_text = text
         self._context = context
         self._debounce_timer.stop()
-        # Never bypass cooldown. Immediate UI actions still wait out rate limits.
-        remaining_ms = int(self._api_rate_limit_remaining_s() * 1000)
+        # Cooldown is per service. Achord 429 must not block Google/DeepL/AI.
+        remaining_ms = int(self._api_rate_limit_remaining_s(context.api_name) * 1000)
         if remaining_ms > 0:
             self._debounce_timer.start(remaining_ms)
             return
@@ -139,22 +142,54 @@ class TranslatorViewModel(QObject):
             except Exception:
                 pass
 
-    def _api_rate_limit_remaining_s(self) -> float:
-        api = getattr(self._fanyi, "_fanyi_jiekou", None)
-        remaining = 0.0
-        getter = getattr(api, "rate_limit_remaining_s", None)
-        if callable(getter):
+    def _api_rate_limit_remaining_s(self, api_name: Optional[str] = None) -> float:
+        """Return remaining cooldown only for the requested service.
+
+        Achord/DeepLX IP bans stay inside AchordBuiltinAPI. They must never be
+        folded into a ViewModel-global timer that also blocks Google/DeepL/AI.
+        """
+        name = api_name
+        if name is None and self._context is not None:
+            name = self._context.api_name
+        name = str(name or "").strip()
+
+        if name == "achord_builtin":
+            remaining = 0.0
             try:
-                remaining = float(getter() or 0.0)
+                from ..gongju.fanyi_api.achord_builtin import AchordBuiltinAPI
+
+                remaining = float(AchordBuiltinAPI.rate_limit_remaining_s() or 0.0)
             except Exception:
-                remaining = 0.0
-        return max(0.0, remaining, float(self._rate_limit_until) - time.monotonic())
+                api = getattr(self._fanyi, "_fanyi_jiekou", None)
+                getter = getattr(api, "rate_limit_remaining_s", None)
+                if callable(getter):
+                    try:
+                        remaining = float(getter() or 0.0)
+                    except Exception:
+                        remaining = 0.0
+            return max(0.0, remaining)
+
+        if name == "openai_compat":
+            return max(0.0, float(self._ai_rate_limit_until) - time.monotonic())
+
+        if name in {"google", "deepl"}:
+            return max(
+                0.0,
+                float(self._remote_rate_limit_until.get(name, 0.0)) - time.monotonic(),
+            )
+
+        return 0.0
+
+    def rate_limit_remaining_s(self, api_name: Optional[str] = None) -> float:
+        """Expose the selected service cooldown to other translation surfaces."""
+        return self._api_rate_limit_remaining_s(api_name)
 
     def _effective_debounce_ms(self) -> int:
         delay = int(self._debounce_ms)
-        if self._context is not None and self._context.api_name == "achord_builtin":
+        api_name = self._context.api_name if self._context is not None else None
+        if api_name == "achord_builtin":
             delay = max(delay, int(self._achord_debounce_ms))
-        remaining_ms = int(self._api_rate_limit_remaining_s() * 1000)
+        remaining_ms = int(self._api_rate_limit_remaining_s(api_name) * 1000)
         return max(delay, remaining_ms)
 
     def _is_rate_limit_error(self, error: Exception) -> bool:
@@ -170,18 +205,52 @@ class TranslatorViewModel(QObject):
             or "too many requests" in lowered
             or "rate limit" in lowered
             or "ratelimit" in lowered
+            or "请求过于频繁" in msg
         )
 
-    def _note_rate_limited(self, cooldown_s: Optional[float] = None) -> float:
-        wait_s = float(self._rate_limit_cooldown_s if cooldown_s is None else cooldown_s)
+    def _note_ai_rate_limited(self, cooldown_s: Optional[float] = None) -> float:
+        wait_s = float(self._ai_rate_limit_cooldown_s if cooldown_s is None else cooldown_s)
         wait_s = max(1.0, wait_s)
-        self._rate_limit_until = max(self._rate_limit_until, time.monotonic() + wait_s)
+        self._ai_rate_limit_until = max(self._ai_rate_limit_until, time.monotonic() + wait_s)
         return wait_s
 
+    def _note_remote_rate_limited(
+        self,
+        api_name: Optional[str],
+        cooldown_s: Optional[float] = None,
+    ) -> float:
+        name = str(api_name or "").strip()
+        wait_s = float(
+            self._remote_rate_limit_cooldown_s if cooldown_s is None else cooldown_s
+        )
+        wait_s = max(1.0, wait_s)
+        if name in {"google", "deepl"}:
+            self._remote_rate_limit_until[name] = max(
+                self._remote_rate_limit_until.get(name, 0.0),
+                time.monotonic() + wait_s,
+            )
+        return wait_s
+
+    def note_service_rate_limit_error(
+        self,
+        api_name: Optional[str],
+        error: Exception,
+    ) -> float:
+        """Record a 429 for the service used outside the main translation panel."""
+        if not self._is_rate_limit_error(error):
+            return 0.0
+
+        name = str(api_name or "").strip()
+        if name in {"google", "deepl"}:
+            self._note_remote_rate_limited(name)
+        elif name == "openai_compat":
+            self._note_ai_rate_limited()
+        return self._api_rate_limit_remaining_s(name)
+
     def _on_debounce_timeout(self) -> None:
-        # If we are still inside a 429 cooldown window, keep waiting instead of
-        # firing another request the moment the original debounce expires.
-        remaining_ms = int(self._api_rate_limit_remaining_s() * 1000)
+        # Service-scoped cooldown only. Switching engines clears this wait path.
+        api_name = self._context.api_name if self._context is not None else None
+        remaining_ms = int(self._api_rate_limit_remaining_s(api_name) * 1000)
         if remaining_ms > 0:
             self._debounce_timer.start(remaining_ms)
             return
@@ -342,27 +411,21 @@ class TranslatorViewModel(QObject):
             if not self._is_rate_limit_error(e):
                 raise
 
-            # Builtin DeepLX/IP bans are enforced inside AchordBuiltinAPI. Do not
-            # auto-retry here; automatic retries can prolong the ban. Other free
-            # endpoints also fail closed after noting a short local cooldown.
-            if api_name == "achord_builtin" or not is_ai:
-                # Prefer the API-layer remaining window when present.
-                wait_s = self._api_rate_limit_remaining_s()
-                if wait_s <= 0:
-                    wait_s = self._note_rate_limited(self._rate_limit_cooldown_s)
-                else:
-                    self._note_rate_limited(wait_s)
-                base = self._safe_error_message(e)
-                self.error_message_changed.emit(base)
-                self.toast_message.emit(base, "warning")
-                raise
-
-            # AI providers often recover quickly after a brief pause.
-            wait_s = self._note_rate_limited(2.0)
             base = self._safe_error_message(e)
             self.error_message_changed.emit(base)
             self.toast_message.emit(base, "warning")
 
+            # Achord/DeepLX: ban window lives in AchordBuiltinAPI only.
+            if api_name == "achord_builtin":
+                raise
+
+            # Google/DeepL use independent cooldowns. Switching service remains immediate.
+            if not is_ai:
+                self._note_remote_rate_limited(api_name)
+                raise
+
+            # AI providers often recover quickly after a brief AI-only pause.
+            wait_s = self._note_ai_rate_limited(self._ai_rate_limit_cooldown_s)
             remaining = int(max(1.0, wait_s))
             while remaining > 0:
                 self.toast_message.emit(f"请求过于频繁，{remaining} 秒后重试", "info")
@@ -371,7 +434,12 @@ class TranslatorViewModel(QObject):
                 if token != self._active_token:
                     raise
 
-            return await once()
+            try:
+                return await once()
+            except Exception as retry_error:
+                if self._is_rate_limit_error(retry_error):
+                    self._note_ai_rate_limited(self._ai_rate_limit_cooldown_s)
+                raise
 
     def _estimate_total_tokens_for_ai(self, text: str, target_language: str) -> int:
         system_prompt = "你是一个专业翻译引擎。只输出翻译后的文本，不要解释，不要加前后缀。"

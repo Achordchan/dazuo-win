@@ -15,17 +15,20 @@ from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from src.gongju.autostart import configure_autostart, is_autostart_enabled
+from src.gongju.update import should_defer_start_for_pending_update
 from src.gui.dialog_utils import build_dialog_stylesheet_for_theme
 from src.shezhi import Config
+from src.version import APP_VERSION
 
 SINGLE_INSTANCE_MEMORY_KEY = "DaZaoFanYiGuanSingleInstance"
 SINGLE_INSTANCE_SERVER_NAME = "DaZaoFanYiGuanSingleInstanceServer"
 
 
-def _get_frozen_base_dir():
-    if hasattr(sys, "_MEIPASS"):
-        return sys._MEIPASS
+def _is_packaged_app() -> bool:
+    return bool(getattr(sys, "frozen", False) or globals().get("__compiled__"))
 
+
+def _get_frozen_base_dir():
     candidates = []
     for raw_path in (sys.executable, sys.argv[0]):
         if raw_path:
@@ -37,6 +40,11 @@ def _get_frozen_base_dir():
                     os.path.join(base, f"{os.path.splitext(os.path.basename(raw_path))[0]}.dist"),
                 ]
             )
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates.extend([module_dir, os.path.dirname(module_dir)])
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(meipass)
     candidates.extend([os.getcwd(), os.path.join(os.getcwd(), "main.dist")])
 
     seen = set()
@@ -46,8 +54,6 @@ def _get_frozen_base_dir():
             continue
         seen.add(normalized)
         if os.path.isdir(os.path.join(normalized, "src", "ziyuan")):
-            return normalized
-        if os.path.isdir(os.path.join(normalized, "PyQt5")):
             return normalized
 
     return os.path.dirname(os.path.abspath(sys.executable))
@@ -116,7 +122,7 @@ def setup_logging() -> None:
 
 
 def _ensure_project_paths() -> None:
-    if getattr(sys, "frozen", False):
+    if _is_packaged_app():
         project_root = _get_frozen_base_dir()
     else:
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -131,7 +137,7 @@ def _ensure_project_paths() -> None:
         if os.path.isdir(path) and path not in sys.path:
             sys.path.insert(0, path)
 
-    if getattr(sys, "frozen", False) and os.path.isdir(project_root):
+    if _is_packaged_app() and os.path.isdir(project_root):
         try:
             os.chdir(project_root)
         except Exception as error:
@@ -148,7 +154,7 @@ from src.gui.zhuchuangkou import ZhuChuangKou
 
 def get_resource_path(relative_path):
     try:
-        base_path = _get_frozen_base_dir() if getattr(sys, "frozen", False) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base_path = _get_frozen_base_dir() if _is_packaged_app() else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return os.path.abspath(os.path.join(base_path, relative_path))
     except Exception as error:
         logging.error(f"获取资源路径失败: {error}")
@@ -192,6 +198,7 @@ sys.excepthook = handle_exception
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--debug", action="store_true", help="启用调试模式")
+    parser.add_argument("--update-restart", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
@@ -407,6 +414,13 @@ def shutdown_async_resources(window: ZhuChuangKou, loop, timeout_seconds: float 
 
 def main():
     args = parse_args()
+    if should_defer_start_for_pending_update(
+        APP_VERSION,
+        update_restart=args.update_restart,
+    ):
+        logging.info("更新替换正在进行，忽略本次普通启动。")
+        return
+
     try:
         if not check_resources():
             logging.error("资源文件检查失败，程序可能无法正常运行")

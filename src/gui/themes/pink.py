@@ -2,6 +2,140 @@
 粉色主题样式表
 """
 
+REDESIGN_STYLE = """
+QWidget#centralWidget,
+QWidget#mainContent,
+QWidget#translationWorkspace {
+    background-color: #FFF4F7;
+}
+
+BiaoTiLan#mainTitleBar {
+    background-color: #FFF4F7;
+}
+
+QFrame#translationToolbar {
+    background-color: #FFFBFC;
+    border: 1px solid #F0CFD9;
+    border-radius: 12px;
+}
+
+QFrame#translationToolbar QFrame#langPill,
+QFrame#translationToolbar QFrame#serviceStatusPill {
+    background-color: #FFF3F7;
+    border: 1px solid #F0CFD9;
+    border-radius: 10px;
+}
+
+QFrame#translationToolbar QLabel {
+    padding: 0;
+}
+
+QFrame#translationToolbar QLabel#langPillLabel,
+QFrame#translationToolbar QLabel#serviceStatusLabel {
+    color: #8A6672;
+    font-size: 13px;
+}
+
+QFrame#translationToolbar QLabel#serviceNameLabel {
+    color: #4A3039;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+QFrame#translationToolbar QComboBox#langComboPill {
+    min-width: 100px;
+    color: #4A3039;
+    font-size: 14px;
+}
+
+QPushButton#langSwitchButton,
+QPushButton#toolbarIconButton {
+    min-width: 0;
+    max-width: 34px;
+    min-height: 34px;
+    max-height: 34px;
+    padding: 0;
+    background-color: #FFF3F7;
+    border: 1px solid #F0CFD9;
+    border-radius: 9px;
+}
+
+QPushButton#langSwitchButton:hover:enabled,
+QPushButton#toolbarIconButton:hover {
+    background-color: #FCE7EE;
+    border-color: #E8B9C8;
+}
+
+QPushButton#langSwitchButton:pressed:enabled,
+QPushButton#toolbarIconButton:pressed {
+    background-color: #F8DBE4;
+}
+
+QFrame#translationPanel {
+    background-color: #FFFBFC;
+    border: 1px solid #F0CFD9;
+    border-radius: 12px;
+}
+
+QFrame#translationPanelHeader {
+    background-color: #FFF6F9;
+    border: none;
+    border-bottom: 1px solid #F0D7DF;
+    border-top-left-radius: 11px;
+    border-top-right-radius: 11px;
+}
+
+QLabel#translationPanelIcon,
+QLabel#translationPanelTitle {
+    padding: 0;
+}
+
+QLabel#translationPanelTitle {
+    color: #4A3039;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+QPushButton#panelActionButton {
+    min-width: 0;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+}
+
+QPushButton#panelActionButton:hover:enabled {
+    background-color: #FCE7EE;
+}
+
+QPushButton#panelActionButton:pressed:enabled {
+    background-color: #F8DBE4;
+}
+
+QPushButton#panelActionButton:disabled {
+    background: transparent;
+}
+
+QTextEdit#sourceTextEdit,
+QTextEdit#targetTextEdit {
+    background-color: #FFFBFC;
+    border: none;
+    border-radius: 0;
+    padding: 14px 16px;
+    color: #3F2A31;
+    selection-background-color: #D14E84;
+    selection-color: #FFFFFF;
+}
+
+QTextEdit#sourceTextEdit:focus,
+QTextEdit#targetTextEdit:focus {
+    background-color: #FFFBFC;
+    border: none;
+}
+"""
 STYLE = """
 QWidget {
     color: #333333;
@@ -477,4 +611,6 @@ QPushButton[toolTip="关闭"]:pressed {
     color: white;
 }
 """ 
+
+STYLE += REDESIGN_STYLE
 

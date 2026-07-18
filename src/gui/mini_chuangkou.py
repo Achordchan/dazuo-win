@@ -3,7 +3,6 @@ from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QEvent
 from PyQt5.QtGui import QCursor, QFont
 import logging
 from ..shezhi import Config
-import asyncio
 import os
 import pyperclip
 import sys
@@ -702,46 +701,23 @@ class MiniChuangKou(QWidget):
             self._showing = False
     
     def set_text_to_translate(self, text):
-        """设置要翻译的文本并开始翻译过程"""
+        """统一通过 WindowModeController 发起迷你窗口翻译。"""
         if not text or not text.strip():
             return
-        
-        # 开始加载动画
-        self.start_loading()
-        
-        # 获取源语言和目标语言
-        source_lang = "自动检测"  # Mini窗口默认使用自动检测
-        target_lang = self._parent.target_lang_combo.currentText() if self._parent else "中文"
-        api_name = self._parent.config.get("translation.api", "google") if self._parent else None
-        api_generation = getattr(self._parent.fanyi, "current_api_generation", None) if self._parent else None
-        
-        # 开始翻译
-        loop = asyncio.get_event_loop()
-        loop.create_task(self.translate_text(text, source_lang, target_lang, api_name, api_generation))
-
-    async def translate_text(self, text, source_lang, target_lang, api_name=None, api_generation=None):
-        """执行翻译过程"""
-        try:
-            # 使用父窗口的翻译功能
-            if self._parent and hasattr(self._parent, 'fanyi'):
-                result = await self._parent.fanyi.fanyi(
-                    text,
-                    source_lang,
-                    target_lang,
-                    expected_api_name=api_name,
-                    expected_api_generation=api_generation,
-                )
-                # 确保结果是字符串
-                if isinstance(result, tuple):
-                    result = str(result[0]) if result else ""
-                self.update_translation(result)
-            else:
-                self.update_translation("翻译失败：无法获取翻译服务")
-        except Exception as e:
-            logger.error(f"翻译出错: {str(e)}")
-            self.update_translation(f"翻译出错：{str(e)}")
-        finally:
+        parent = self._parent
+        controller = getattr(parent, "window_mode_controller", None) if parent else None
+        if controller is None or not hasattr(controller, "_start_mini_translation"):
+            logger.error("迷你窗口缺少翻译控制器，已拒绝绕过 ViewModel 的请求。")
             self.stop_loading()
+            self.set_output_text("翻译失败：翻译控制器不可用")
+            return
+        context = parent._get_vm_context() if hasattr(parent, "_get_vm_context") else None
+        controller._start_mini_translation(
+            text,
+            api_name=getattr(context, "api_name", None),
+            api_generation=getattr(context, "api_generation", None),
+        )
+
 
     def update_translation(self, text):
         """更新翻译结果"""

@@ -38,10 +38,10 @@ class temporary_profile:
 def check_versions():
     from src.version import APP_VERSION
 
-    assert APP_VERSION == "1.2.9", APP_VERSION
+    assert APP_VERSION == "1.2.10", APP_VERSION
     for relative in ("setup.py", "version.generated.iss", "file_version_info.txt", "src/ziyuan/changelog.md"):
         text = (REPO_ROOT / relative).read_text(encoding="utf-8")
-        assert "1.2.9" in text, relative
+        assert "1.2.10" in text, relative
 
 
 def check_first_run_template():
@@ -903,9 +903,101 @@ def check_about_dialog_theme_ui():
         AboutDialog._load_avatar = original_load_avatar
 
 
+def check_main_window_redesign_ui():
+    os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+    from PyQt5.QtWidgets import QApplication, QFrame, QMainWindow, QPushButton
+    from src.gui.theme_controller import update_button_icons
+    from src.gui.themes import ThemeManager
+    from src.gui.zhuchuangkou import ZhuChuangKou
+    from src.version import APP_VERSION
+
+    class ConfigStub:
+        def __init__(self):
+            self._config = {'theme': 'light', 'window': {}}
+
+        def get(self, key, default=None):
+            return self._config.get(key, default)
+
+        def set(self, key, value):
+            self._config[key] = value
+
+        def save(self):
+            return None
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    window = ZhuChuangKou.__new__(ZhuChuangKou)
+    QMainWindow.__init__(window)
+    window.config = ConfigStub()
+    window._is_dragging = False
+    window._resize_edge = None
+    window.is_mini_mode = False
+
+    for name in (
+        '_on_source_lang_changed',
+        '_on_target_lang_changed',
+        '_switch_languages',
+        '_retry_connection',
+        '_on_theme_change',
+        '_toggle_mini_mode',
+        '_on_settings',
+        '_vm_on_input_text_changed',
+        '_load_default_settings',
+    ):
+        setattr(window, name, lambda *args, **kwargs: None)
+
+    ZhuChuangKou._create_ui(window)
+    window.setStyleSheet(ThemeManager.get_theme_style('浅色主题'))
+    update_button_icons(window, 'light')
+    window.setMinimumSize(969, 684)
+    window.resize(969, 684)
+    window.show()
+    app.processEvents()
+    try:
+        assert window.biaotilan.title_label.text() == f'大佐翻译官 v{APP_VERSION}'
+        assert not hasattr(window.biaotilan, 'theme_btn')
+        assert not hasattr(window.biaotilan, 'mini_mode_btn')
+        assert not hasattr(window.biaotilan, 'settings_btn')
+        assert window.findChild(QFrame, 'translationToolbar') is not None
+        assert len(window.findChildren(QFrame, 'translationPanel')) == 2
+        assert len(window.findChildren(QPushButton, 'toolbarIconButton')) == 3
+        assert window.translation_workspace_layout.stretch(0) == 1
+        assert window.translation_workspace_layout.stretch(1) == 1
+        assert abs(window.source_panel.width() - window.target_panel.width()) <= 1
+
+        window.input_text.setPlainText('已安装 App 和 Spark AI')
+        window.output_text.setPlainText('App and Spark AI have been installed')
+        app.processEvents()
+        assert window.clear_source_button.isEnabled()
+        assert window.copy_translation_button.isEnabled()
+        assert window.output_text._use_header_copy_button
+        assert window.output_text.copy_button.isHidden()
+
+        theme_keys = {'浅色主题': 'light', '深色主题': 'dark', '粉色主题': 'pink'}
+        for theme_name in ThemeManager.get_theme_names():
+            style = ThemeManager.get_theme_style(theme_name)
+            assert 'QFrame#translationToolbar' in style
+            assert 'QFrame#translationPanel' in style
+            assert 'QTextEdit#sourceTextEdit' in style
+            assert 'QTextEdit#targetTextEdit' in style
+            window.setStyleSheet(style)
+            update_button_icons(window, theme_keys[theme_name])
+            app.processEvents()
+    finally:
+        window._is_quitting = True
+        window.close()
+
+
+def check_1_2_10_regressions():
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "tools" / "regression_tests_1_2_10.py")],
+        check=False,
+    )
+    assert result.returncode == 0, result.returncode
+
+
 def check_package(package_path: Path | None = None):
     from src.version import APP_VERSION
-    from tools.verify_windows_package import verify_package
+    from tools.verify_windows_package import verify_adjacent_signature, verify_package
 
     package = package_path or REPO_ROOT / "output" / f"dazuofanyiguan_full.for.windows_{APP_VERSION}.zip"
     if os.environ.get("DZFYQ_SKIP_PACKAGE_CHECK") == "1" and not package.exists():
@@ -913,6 +1005,7 @@ def check_package(package_path: Path | None = None):
     if not package.exists():
         raise FileNotFoundError(f"package not found for smoke test: {package}")
     verify_package(package, APP_VERSION)
+    verify_adjacent_signature(package, APP_VERSION)
 
 
 def main() -> int:
@@ -939,6 +1032,8 @@ def main() -> int:
         check_text_font_size_settings,
         check_mini_window_ui,
         check_about_dialog_theme_ui,
+        check_main_window_redesign_ui,
+        check_1_2_10_regressions,
         lambda: check_package(args.package),
     ]
     for check in checks:

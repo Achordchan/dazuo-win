@@ -16,6 +16,7 @@ class WindowModeController:
     def __init__(self, main_window):
         self.main_window = main_window
         self._mini_request_token = 0
+        self._mini_request_task = None
 
     def ensure_mini_window(self):
         if not getattr(self.main_window, "mini_window", None):
@@ -95,12 +96,10 @@ class WindowModeController:
         if self.main_window.config.get("mini_mode", False):
             self.ensure_mini_window()
             context = self.main_window._get_vm_context()
-            asyncio.ensure_future(
-                self.translate_and_show_mini(
-                    text,
-                    api_name=context.api_name,
-                    api_generation=context.api_generation,
-                )
+            self._start_mini_translation(
+                text,
+                api_name=context.api_name,
+                api_generation=context.api_generation,
             )
             return
 
@@ -123,21 +122,50 @@ class WindowModeController:
         if self.main_window.config.get("mini_mode", False):
             self.ensure_mini_window()
             context = self.main_window._get_vm_context()
-            asyncio.ensure_future(
-                self.translate_and_show_mini(
-                    text,
-                    api_name=context.api_name,
-                    api_generation=context.api_generation,
-                )
+            self._start_mini_translation(
+                text,
+                api_name=context.api_name,
+                api_generation=context.api_generation,
             )
             return
 
         self.main_window.input_text.setPlainText(text)
         self.main_window.translator_vm.translate_now(text, self.main_window._get_vm_context())
 
-    async def translate_and_show_mini(self, text_to_translate, service=None, api_name=None, api_generation=None):
+    def _start_mini_translation(self, text_to_translate, api_name=None, api_generation=None):
+        # Cancel any previous mini request so rapid copy/translate does not pile up upstream usage.
+        previous = self._mini_request_task
+        if previous is not None and not previous.done():
+            previous.cancel()
         self._mini_request_token += 1
         request_token = self._mini_request_token
+        task = asyncio.ensure_future(
+            self.translate_and_show_mini(
+                text_to_translate,
+                api_name=api_name,
+                api_generation=api_generation,
+                request_token=request_token,
+            )
+        )
+        self._mini_request_task = task
+        return task
+
+    async def translate_and_show_mini(
+        self,
+        text_to_translate,
+        service=None,
+        api_name=None,
+        api_generation=None,
+        request_token=None,
+    ):
+        if request_token is None:
+            # External callers still get request isolation via a new token.
+            previous = self._mini_request_task
+            if previous is not None and not previous.done():
+                previous.cancel()
+            self._mini_request_token += 1
+            request_token = self._mini_request_token
+            self._mini_request_task = asyncio.current_task()
         try:
             mini_window = self.ensure_mini_window()
             mini_window.resize(mini_window.DEFAULT_WIDTH, mini_window.DEFAULT_HEIGHT)
@@ -149,6 +177,21 @@ class WindowModeController:
                 context = self.main_window._get_vm_context()
                 api_name = context.api_name
                 api_generation = context.api_generation
+
+            translator_vm = getattr(self.main_window, "translator_vm", None)
+            remaining_getter = getattr(translator_vm, "rate_limit_remaining_s", None)
+            remaining = (
+                float(remaining_getter(api_name) or 0.0)
+                if callable(remaining_getter)
+                else 0.0
+            )
+            if remaining > 0:
+                wait_seconds = max(1, int(remaining + 0.999))
+                mini_window.stop_loading()
+                mini_window.set_output_text(
+                    f"请求过于频繁，请在 {wait_seconds} 秒后重试"
+                )
+                return
 
             translation_result = await self.main_window.fanyi.fanyi(
                 text_to_translate,
@@ -171,11 +214,24 @@ class WindowModeController:
             mini_window.stop_loading()
             mini_window.set_output_text(translation_text)
             mini_window._adjust_window_size_for_text(translation_text)
-            logger.info("Mini window showed translation result (len_in=%s, len_out=%s)", len(text_to_translate or ""), len(translation_text or ""))
+            logger.info(
+                "Mini window showed translation result (len_in=%s, len_out=%s)",
+                len(text_to_translate or ""),
+                len(translation_text or ""),
+            )
+        except asyncio.CancelledError:
+            raise
         except Exception as error:
             logger.error(f"Mini窗口翻译失败: {error}")
             if request_token != self._mini_request_token:
                 return
+            rate_limit_notifier = getattr(
+                getattr(self.main_window, "translator_vm", None),
+                "note_service_rate_limit_error",
+                None,
+            )
+            if callable(rate_limit_notifier):
+                rate_limit_notifier(api_name, error)
             if getattr(self.main_window, "mini_window", None):
                 self.main_window.mini_window.stop_loading()
                 self.main_window.mini_window.set_output_text(f"翻译失败: {error}")

@@ -292,102 +292,85 @@ class BiaoTiLan(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
-        self.setFixedHeight(40)
-        
-        # 创建布局
+        self.setObjectName('mainTitleBar')
+        self.setFixedHeight(36)
+
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(15, 0, 15, 0)
-        layout.setSpacing(4)
-        
-        # 创建标题和About按钮
-        self.title_label = QLabel("大佐翻译官v1 - 开源AI翻译助手")
-        self.about_btn = QPushButton("About")
-        self.about_btn.setFixedSize(70, 24)
-        
-        def show_about():
-            dialog = AboutDialog(self.parent)
-            dialog.exec_()
-            
-        self.about_btn.clicked.connect(show_about)
-        layout.addWidget(self.title_label)
-        layout.addWidget(self.about_btn)
-        layout.addStretch()
-        
-        # 添加工具按钮
-        self.settings_btn = QPushButton()
-        self.settings_btn.setIcon(themed_icon("settings"))
-        self.settings_btn.setToolTip("设置")
-        self.settings_btn.clicked.connect(self.parent._on_settings)
-        
-        # 将历史记录按钮改为迷你模式按钮
-        self.mini_mode_btn = QPushButton()
-        self.mini_mode_btn.setIcon(themed_icon("mini_mode"))
-        self.mini_mode_btn.setToolTip("切换到迷你窗口模式")
-        self.mini_mode_btn.clicked.connect(lambda: self.parent._toggle_mini_mode(True, show_hint=True))
-        
-        self.theme_btn = QPushButton()
-        self.theme_btn.setIcon(themed_icon("theme"))
-        self.theme_btn.setToolTip("切换主题")
-        self.theme_btn.clicked.connect(self.parent._on_theme_change)
-        
-        # 最小化按钮
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(0)
+
+        left_actions = QWidget(self)
+        left_actions.setFixedWidth(96)
+        left_layout = QHBoxLayout(left_actions)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+
+        self.about_btn = QPushButton()
+        self.about_btn.setObjectName('titleBarButton')
+        self.about_btn.setFixedSize(32, 32)
+        self.about_btn.setToolTip('关于')
+        self.about_btn.clicked.connect(self.show_about_dialog)
+        left_layout.addWidget(self.about_btn)
+        left_layout.addStretch()
+
+        self.title_label = QLabel(f'大佐翻译官 v{APP_VERSION}')
+        self.title_label.setObjectName('mainTitleLabel')
+        self.title_label.setAlignment(Qt.AlignCenter)
+
+        right_actions = QWidget(self)
+        right_actions.setFixedWidth(96)
+        right_layout = QHBoxLayout(right_actions)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+
         self.min_btn = QPushButton()
+        self.min_btn.setObjectName('titleBarButton')
         self.min_btn.setFixedSize(32, 32)
-        self.min_btn.setToolTip("最小化")
+        self.min_btn.setToolTip('最小化')
         self.min_btn.clicked.connect(self.parent.showMinimized)
-        
-        # 最大化/还原按钮
+
         self.max_btn = QPushButton()
+        self.max_btn.setObjectName('titleBarButton')
         self.max_btn.setFixedSize(32, 32)
-        self.max_btn.setToolTip("最大化")
+        self.max_btn.setToolTip('最大化')
         self.max_btn.clicked.connect(self._toggle_maximize)
-        
-        # 关闭按钮
+
         self.close_btn = QPushButton()
+        self.close_btn.setObjectName('titleBarCloseButton')
         self.close_btn.setFixedSize(32, 32)
-        self.close_btn.setToolTip("关闭")
+        self.close_btn.setToolTip('关闭')
         self.close_btn.clicked.connect(self.parent.close)
-        
-        # 设置工具按钮大小
-        for btn in (self.settings_btn, self.mini_mode_btn, self.theme_btn):
-            btn.setFixedSize(28, 28)
-            btn.setIconSize(QSize(16, 16))
-        
-        # 加载有按布局
-        layout.addWidget(self.settings_btn)
-        layout.addWidget(self.mini_mode_btn)
-        layout.addWidget(self.theme_btn)
-        layout.addWidget(self.min_btn)
-        layout.addWidget(self.max_btn)
-        layout.addWidget(self.close_btn)
+
+        right_layout.addWidget(self.min_btn)
+        right_layout.addWidget(self.max_btn)
+        right_layout.addWidget(self.close_btn)
+
+        layout.addWidget(left_actions)
+        layout.addWidget(self.title_label, 1)
+        layout.addWidget(right_actions)
 
         theme_name = self.parent.config.get("theme", "dark") if hasattr(self.parent, "config") else "dark"
         self.apply_icons(theme_name)
         self.apply_theme(theme_name)
 
+    def show_about_dialog(self):
+        dialog = AboutDialog(self.parent)
+        dialog.exec_()
+
     def apply_theme(self, theme_name: str):
         palette = get_dialog_palette(self.parent)
-        self.title_label.setStyleSheet(f"color: {palette.text}; font-size: 16px; font-weight: 500;")
-        self.about_btn.setStyleSheet(build_link_button_stylesheet(self.parent))
-
-        for btn in (self.settings_btn, self.mini_mode_btn, self.theme_btn, self.min_btn, self.max_btn):
+        self.title_label.setStyleSheet(f'color: {palette.text}; font-size: 14px; font-weight: 600;')
+        for btn in (self.about_btn, self.min_btn, self.max_btn):
             btn.setStyleSheet(build_icon_button_stylesheet(self.parent))
             btn.setCursor(Qt.PointingHandCursor)
 
         self.close_btn.setStyleSheet(build_icon_button_stylesheet(self.parent, danger=True))
         self.close_btn.setCursor(Qt.PointingHandCursor)
 
-        self.min_btn.setStyleSheet(build_icon_button_stylesheet(self.parent))
-        self.max_btn.setStyleSheet(build_icon_button_stylesheet(self.parent))
-        self.close_btn.setStyleSheet(build_icon_button_stylesheet(self.parent, danger=True))
-
     def apply_icons(self, theme_name: str):
-        if hasattr(self, "settings_btn"):
-            self.settings_btn.setIcon(themed_icon("settings", theme_name))
-        if hasattr(self, "theme_btn"):
-            self.theme_btn.setIcon(themed_icon("theme", theme_name))
-        if hasattr(self, "mini_mode_btn"):
-            self.mini_mode_btn.setIcon(themed_icon("mini_mode", theme_name))
+        if hasattr(self, 'about_btn'):
+            self.about_btn.setIcon(themed_icon('about', theme_name, 'secondary'))
+            self.about_btn.setIconSize(QSize(15, 15))
         if hasattr(self, "min_btn"):
             self.min_btn.setIcon(themed_icon("minimize", theme_name, "secondary"))
             self.min_btn.setIconSize(QSize(15, 15))

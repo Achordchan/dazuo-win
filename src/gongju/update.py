@@ -26,6 +26,32 @@ from src.gongju.update_trust import (
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
+def should_defer_start_for_pending_update(
+    current_version: str,
+    *,
+    update_restart: bool = False,
+    max_age_seconds: float = 600.0,
+) -> bool:
+    """Block ordinary launches while the external updater owns the install dir."""
+    if update_restart:
+        return False
+    cache_root = os.environ.get("DZFYQ_HOME") or os.path.expanduser("~/.dzfyq")
+    pending_path = os.path.join(cache_root, "update_state", "pending_update.json")
+    if not os.path.isfile(pending_path):
+        return False
+    try:
+        with open(pending_path, "r", encoding="utf-8") as state_file:
+            state = json.load(state_file)
+        if not isinstance(state, dict) or not state.get("expected_version"):
+            return False
+        age = max(0.0, time.time() - os.path.getmtime(pending_path))
+        return age <= max(float(max_age_seconds), 1.0)
+    except Exception as error:
+        logger.warning("读取待应用更新状态失败，按非活动状态处理: %s", error)
+        return False
+
+
 class Updater(QObject):
     MAX_UPDATE_PACKAGE_BYTES = 400 * 1024 * 1024
     MAX_ZIP_MEMBERS = 20000
@@ -47,14 +73,27 @@ class Updater(QObject):
         self.asset_suffix = None
         self.latest_version = None
         self.release_signature = None
+        self._force_update_requested = False
         self.expected_asset_name = None
         self.expected_package_sha256 = None
         self.expected_package_size = None
+        self._download_in_progress = False
         cache_root = os.environ.get("DZFYQ_HOME") or os.path.expanduser("~/.dzfyq")
         self._download_dir = os.path.join(cache_root, "update_cache")
         self._backup_root = os.path.join(cache_root, "update_backup")
         self._state_dir = os.path.join(cache_root, "update_state")
-        self._cleanup_download_cache()
+        # Never wipe update_cache while a previous apply is still pending.
+        if not os.path.exists(self._pending_update_path()):
+            self._cleanup_download_cache()
+
+    @property
+    def force_update_requested(self) -> bool:
+        """Whether release metadata requests an automatic authenticated update."""
+        return bool(self._force_update_requested)
+
+    @property
+    def download_in_progress(self) -> bool:
+        return bool(self._download_in_progress)
 
     def _ensure_download_dir(self) -> None:
         os.makedirs(self._download_dir, exist_ok=True)
@@ -291,6 +330,7 @@ class Updater(QObject):
             platform=platform,
             max_bytes=self.MAX_UPDATE_PACKAGE_BYTES,
         )
+        self.force_update = bool(self._force_update_requested)
         self.expected_package_sha256 = actual_sha
         self.expected_package_size = size
 
@@ -448,7 +488,7 @@ function Start-TargetAppIfStopped {
 
     $targetExe = Join-Path $TargetDir $ExeName
     if (Test-Path -LiteralPath $targetExe -PathType Leaf) {
-        Start-Process -FilePath $targetExe -WorkingDirectory $TargetDir
+        Start-Process -FilePath $targetExe -WorkingDirectory $TargetDir -ArgumentList "--update-restart"
         Write-UpdateLog "Started target app $Reason."
     }
     else {
@@ -502,7 +542,7 @@ try {
     }
     Assert-ExpectedVersion -Directory $TargetDir -Phase "target"
 
-    Start-Process -FilePath $targetExe -WorkingDirectory $TargetDir
+    Start-Process -FilePath $targetExe -WorkingDirectory $TargetDir -ArgumentList "--update-restart"
     Write-UpdateLog "Update completed and app restarted."
     Write-UpdateResult -Status "success" -Message "Update completed."
     Remove-Item -LiteralPath $PendingPath -Force -ErrorAction SilentlyContinue
@@ -613,13 +653,22 @@ catch {
             str(self.latest_version or ""),
         ]
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(
-            command,
-            shell=False,
-            env=env,
-            cwd=self._download_dir,
-            creationflags=creationflags,
-        )
+        try:
+            subprocess.Popen(
+                command,
+                shell=False,
+                env=env,
+                cwd=self._download_dir,
+                creationflags=creationflags,
+            )
+        except Exception:
+            try:
+                os.remove(self._pending_update_path())
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_error:
+                logger.warning("Failed to remove pending update state after launcher failure: %s", cleanup_error)
+            raise
         os._exit(0)
 
     def discard_downloaded_update(self, file_path: str) -> None:
@@ -634,10 +683,15 @@ catch {
 
     async def check_update(self):
         """检查是否有新版本可用"""
+        if self._download_in_progress:
+            logger.info("更新包正在下载，跳过重复更新检查。")
+            return False
         try:
             self.update_url = None
             self.asset_suffix = None
             self.latest_version = None
+            self.force_update = False
+            self._force_update_requested = False
             self.release_signature = None
             self.expected_asset_name = None
             self.expected_package_sha256 = None
@@ -679,9 +733,10 @@ catch {
                         self.release_notes = data.get('body') or "暂无更新说明"
                         logger.info(f"更新说明: {self.release_notes}")
                         
-                        # 检查是否强制更新
+                        # Parse force-update marker and signature first, but only
+                        # activate force_update after platform signature + asset exist.
                         marker = "update=1"
-                        self.force_update = marker in self.release_notes
+                        wants_force_update = marker in self.release_notes
                         current_platform = self._current_update_platform()
                         self.release_signature = extract_signature_from_release_notes(
                             self.release_notes,
@@ -695,8 +750,7 @@ catch {
                         # 移除强制更新标记与签名标记，避免展示在更新说明中
                         clean_notes = self.release_notes.replace(marker, "").strip()
                         clean_notes = strip_signature_markers_from_notes(clean_notes)
-                        logger.info(f"是否强制更新: {self.force_update}")
-                        
+
                         # 获取下载链接
                         platform_suffixes = []
                         if sys.platform == "darwin":
@@ -722,11 +776,18 @@ catch {
                                 if self.update_url:
                                     logger.info(f"找到更新包下载链接: {self.update_url}")
                                     break
-                        
+
                         if self.update_url:
+                            # Metadata may request force update, but enforcement only
+                            # becomes active after the downloaded package is authenticated.
+                            self._force_update_requested = wants_force_update
+                            self.force_update = False
+                            logger.info(f"是否请求强制更新: {wants_force_update}")
                             logger.info("发送更新可用信号")
                             self.update_available.emit(latest_version, clean_notes, self.force_update)
                             return True
+                        # Incomplete release must not trigger force-exit.
+                        self.force_update = False
                         suffix_text = "/".join(platform_suffixes)
                         if sys.platform == "win32":
                             self.update_error.emit(
@@ -751,10 +812,14 @@ catch {
 
     async def download_update(self):
         """下载更新文件"""
+        if self._download_in_progress:
+            logger.info("更新包下载已在进行，忽略重复下载请求。")
+            return
         if not self.update_url:
             self.update_error.emit("没有可用的更新")
             return
 
+        self._download_in_progress = True
         temp_path = ""
         try:
             suffix = self.asset_suffix or (".dmg" if sys.platform == "darwin" else ".zip")
@@ -804,6 +869,9 @@ catch {
             self.update_error.emit(f"下载更新失败：{str(e)}")
             if temp_path and os.path.exists(temp_path):
                 os.unlink(temp_path)
+        finally:
+            self._download_in_progress = False
+
 
     def install_update(self, file_path):
         """安装更新"""
@@ -816,10 +884,10 @@ catch {
                 self._apply_windows_full_update(file_path)
                 return
 
-            self.update_error.emit("暂不支持该平台自动更新。")
+            raise RuntimeError("暂不支持该平台自动更新。")
         except Exception as e:
             logger.error(f"安装更新出错: {e}")
-            self.update_error.emit(f"安装更新失败: {str(e)}")
+            raise
 
     def _compare_versions(self, version1, version2):
         """比较版本号，返回1表示version1更新，-1表示version2更新，0表示相同"""

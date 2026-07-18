@@ -29,6 +29,7 @@ class ShuChuKuang(QTextEdit):
         self.setMinimumHeight(270)
 
         self._is_loading = False
+        self._use_header_copy_button = False
 
         self._ai_info_model = None
         self._ai_info_duration_ms = None
@@ -39,6 +40,7 @@ class ShuChuKuang(QTextEdit):
         self.copy_button.clicked.connect(self._on_copy)
         self.copy_button.hide()
         self.copy_button.raise_()
+        self.textChanged.connect(self._sync_action_buttons)
 
         # 创建 AI 信息按钮（仅 AI 翻译完成后显示）
         self.ai_info_button = QPushButton("", self)
@@ -62,6 +64,19 @@ class ShuChuKuang(QTextEdit):
         # 设置右键菜单样式
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
+
+    def set_header_copy_button_mode(self, enabled: bool):
+        self._use_header_copy_button = bool(enabled)
+        self._sync_action_buttons()
+
+    def _sync_action_buttons(self):
+        has_text = bool(self.toPlainText().strip())
+        can_copy = has_text and not self._is_loading
+        self.copy_button.setEnabled(can_copy)
+        self.copy_button.setVisible(can_copy and not self._use_header_copy_button)
+        if not has_text:
+            self.ai_info_button.hide()
+        self._update_action_buttons_positions()
 
     def _update_action_buttons_positions(self):
         margin = 8
@@ -92,16 +107,16 @@ class ShuChuKuang(QTextEdit):
         menu.clear()
         
         # 添加自定义菜单项
-        actions = {
-            "复制": "Ctrl+C",
-            None: None,  # 分隔符
-            "全选": "Ctrl+A",
-            None: None,  # 分隔符
-            "🌟 大佐翻译官": None,
-            "👤 作者: Achord": None
-        }
+        actions = [
+            ('复制', 'Ctrl+C'),
+            (None, None),
+            ('全选', 'Ctrl+A'),
+            (None, None),
+            ('大佐翻译官', None),
+            ('作者: Achord', None),
+        ]
         
-        for text, shortcut in actions.items():
+        for text, shortcut in actions:
             if text is None:
                 menu.addSeparator()
             else:
@@ -147,6 +162,7 @@ class ShuChuKuang(QTextEdit):
         """停止加载动画"""
         self.loading_timer.stop()
         self._is_loading = False
+        self._sync_action_buttons()
     
     def resizeEvent(self, event):
         """重写大小改变事件，更新复制按钮位置"""
@@ -222,22 +238,7 @@ class ShuChuKuang(QTextEdit):
     def setPlainText(self, text):
         """重写文本设置方法"""
         super().setPlainText(text)
-        # 文本改变时更新按钮状态
-        if self._is_loading:
-            self.copy_button.hide()
-            self.copy_button.setEnabled(False)
-        else:
-            has_text = bool((text or "").strip())
-            if has_text:
-                self.copy_button.show()
-                self.copy_button.setEnabled(True)
-            else:
-                self.copy_button.hide()
-                self.copy_button.setEnabled(False)
-
-        if not (text or "").strip():
-            self.ai_info_button.hide()
-        self._update_action_buttons_positions()
+        self._sync_action_buttons()
     
     def wheelEvent(self, event):
         """重写滚轮事件，确保按钮受滚动影响"""
@@ -273,8 +274,10 @@ class AITranslatingStatusBar(QFrame):
         self.info_button.setToolTip("AI 翻译详情")
         layout.addWidget(self.info_button)
 
-        self.sparkles = QLabel("✨")
+        self.sparkles = QLabel()
         self.sparkles.setObjectName("aiStatusSparkles")
+        self.sparkles.setFixedSize(16, 16)
+        self.sparkles.setPixmap(themed_icon('translation').pixmap(QSize(14, 14)))
         layout.addWidget(self.sparkles)
 
         self.label = QLabel("")
