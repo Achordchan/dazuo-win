@@ -316,23 +316,69 @@ class Updater(QObject):
                 result[name.lower()] = asset
         return result
 
-    async def _read_signature_metadata(
+    async def _mirror_asset_candidates(
         self,
         session,
-        assets_by_name: dict[str, dict],
-        package_asset: dict,
-        *,
-        expected_package_type: str,
-        expected_target_version: str,
-    ) -> dict | None:
-        package_name = str(package_asset.get("name") or "").strip()
-        signature_asset = assets_by_name.get(f"{package_name}.sig.json".lower())
-        if not signature_asset:
-            return None
-        signature_url = str(signature_asset.get("browser_download_url") or "").strip()
-        if not signature_url:
-            raise RuntimeError(f"签名元数据缺少下载地址：{package_name}")
-        async with session.get(signature_url) as response:
+        asset_name: str,
+        expected_version: str,
+    ) -> list[dict]:
+        """在其他更新源上查找同名、同版本的资源，供主源下载失败时兜底。
+
+        只做定位，不放松校验：下载后仍按同一份签名/摘要/大小验证，镜像无法替换内容。
+        """
+        candidates: list[dict] = []
+        wanted = str(asset_name or "").strip().lower()
+        target = normalize_version(expected_version)
+        if not wanted or not target:
+            return candidates
+        active = self.active_update_source
+        for source in self.update_sources:
+            if active is not None and source.api_url == active.api_url:
+                continue
+            try:
+                async with session.get(
+                    source.api_url,
+                    headers=source.request_headers(),
+                    timeout=aiohttp.ClientTimeout(total=UPDATE_SOURCE_TIMEOUT_SECONDS),
+                ) as response:
+                    if response.status != 200:
+                        logger.warning(
+                            "镜像源 %s 不可用: %s",
+                            source.name,
+                            self._describe_source_status(source, response.status),
+                        )
+                        continue
+                    data = await response.json(content_type=None)
+            except Exception as error:
+                logger.warning("镜像源 %s 请求失败: %s", source.name, error)
+                continue
+            if not isinstance(data, dict):
+                continue
+            tag = str(data.get("tag_name") or data.get("name") or "")
+            if normalize_version(tag) != target:
+                logger.warning(
+                    "镜像源 %s 的最新版本 %s 与目标版本 %s 不一致，跳过",
+                    source.name,
+                    tag,
+                    target,
+                )
+                continue
+            asset = self._release_assets_by_name(data.get("assets")).get(wanted)
+            url = str((asset or {}).get("browser_download_url") or "").strip()
+            if not url:
+                logger.warning("镜像源 %s 缺少资源 %s", source.name, asset_name)
+                continue
+            candidates.append(
+                {
+                    "source": source.name,
+                    "url": url,
+                    "size": int((asset or {}).get("size") or 0),
+                }
+            )
+        return candidates
+
+    async def _fetch_small_asset(self, session, url: str, package_name: str) -> bytes:
+        async with session.get(url) as response:
             if response.status != 200:
                 raise RuntimeError(
                     f"下载签名元数据失败：HTTP {response.status}，文件 {package_name}"
@@ -349,7 +395,47 @@ class Updater(QObject):
                 if total > self.MAX_SIGNATURE_METADATA_BYTES:
                     raise RuntimeError(f"签名元数据体积异常：{package_name}")
                 chunks.append(chunk)
-            raw = b"".join(chunks)
+            return b"".join(chunks)
+
+    async def _read_signature_metadata(
+        self,
+        session,
+        assets_by_name: dict[str, dict],
+        package_asset: dict,
+        *,
+        expected_package_type: str,
+        expected_target_version: str,
+    ) -> dict | None:
+        package_name = str(package_asset.get("name") or "").strip()
+        signature_name = f"{package_name}.sig.json"
+        signature_asset = assets_by_name.get(signature_name.lower())
+        if not signature_asset:
+            return None
+        signature_url = str(signature_asset.get("browser_download_url") or "").strip()
+        if not signature_url:
+            raise RuntimeError(f"签名元数据缺少下载地址：{package_name}")
+        try:
+            raw = await self._fetch_small_asset(session, signature_url, package_name)
+        except Exception as primary_error:
+            # 主源（如 GitHub 资源域名）不可达时，从镜像源取同名签名文件；内容校验不变。
+            raw = None
+            for candidate in await self._mirror_asset_candidates(
+                session, signature_name, expected_target_version
+            ):
+                try:
+                    raw = await self._fetch_small_asset(session, candidate["url"], package_name)
+                    logger.warning(
+                        "主更新源签名元数据下载失败（%s），已改用 %s 镜像",
+                        primary_error,
+                        candidate["source"],
+                    )
+                    break
+                except Exception as mirror_error:
+                    logger.warning(
+                        "镜像源 %s 签名元数据下载失败: %s", candidate["source"], mirror_error
+                    )
+            if raw is None:
+                raise primary_error
         try:
             payload = json.loads(raw.decode("utf-8-sig"))
         except Exception as error:
@@ -1324,7 +1410,62 @@ catch {
         asset: UpdateAsset,
         temp_path: str,
     ) -> None:
-        async with session.get(asset.url) as response:
+        """下载资源；主源资源域名不可达时改用其他更新源上的同名同版本资源。
+
+        无论从哪个源下载，随后都按同一份签名、SHA256 和大小校验，镜像无法篡改内容。
+        """
+        try:
+            await self._download_url_to_path(session, asset.url, asset, temp_path)
+            return
+        except Exception as primary_error:
+            self._remove_partial_download(temp_path)
+            candidates = await self._mirror_asset_candidates(
+                session, asset.name, self.latest_version or ""
+            )
+            if not candidates:
+                raise
+            logger.warning("主更新源下载失败（%s），尝试镜像源", primary_error)
+            for candidate in candidates:
+                mirror_size = int(candidate.get("size") or 0)
+                if asset.size_bytes and mirror_size and mirror_size != asset.size_bytes:
+                    logger.warning(
+                        "镜像源 %s 的 %s 大小 %s 与发布信息 %s 不一致，跳过",
+                        candidate["source"],
+                        asset.name,
+                        mirror_size,
+                        asset.size_bytes,
+                    )
+                    continue
+                self.update_progress.emit(0)
+                try:
+                    await self._download_url_to_path(
+                        session, candidate["url"], asset, temp_path
+                    )
+                    logger.info("已从 %s 镜像下载 %s", candidate["source"], asset.name)
+                    return
+                except Exception as mirror_error:
+                    self._remove_partial_download(temp_path)
+                    logger.warning(
+                        "镜像源 %s 下载失败: %s", candidate["source"], mirror_error
+                    )
+            raise primary_error
+
+    @staticmethod
+    def _remove_partial_download(temp_path: str) -> None:
+        try:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError as error:
+            logger.warning("清理未完成的下载失败: %s", error)
+
+    async def _download_url_to_path(
+        self,
+        session,
+        url: str,
+        asset: UpdateAsset,
+        temp_path: str,
+    ) -> None:
+        async with session.get(url) as response:
             if response.status == 404:
                 raise RuntimeError("更新包资源不存在（HTTP 404）")
             if response.status == 403:

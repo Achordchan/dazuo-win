@@ -348,11 +348,16 @@ class MicrosoftAPI(FanYiJieKou):
         pieces = []
         detected: Optional[str] = None
         for chunk in split_text_for_translation(text, limit):
-            if not chunk.strip():
+            core = chunk.strip()
+            if not core:
                 pieces.append(chunk)
                 continue
-            translated, chunk_detected = await translate_chunk(chunk, source_code, target_code)
-            pieces.append(translated)
+            # 服务端通常会去掉译文首尾空白，分段边界的空格/换行由这里单独保留并还原，
+            # 否则相邻分段的单词会被粘连、段落分隔会丢失。
+            leading = chunk[: len(chunk) - len(chunk.lstrip())]
+            trailing = chunk[len(chunk.rstrip()):]
+            translated, chunk_detected = await translate_chunk(core, source_code, target_code)
+            pieces.append(f"{leading}{translated.strip()}{trailing}")
             if detected is None and chunk_detected:
                 detected = chunk_detected
         return "".join(pieces).strip(), detected

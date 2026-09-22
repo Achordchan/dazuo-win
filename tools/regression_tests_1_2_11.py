@@ -342,6 +342,113 @@ async def check_update_source_falls_back_to_gitee() -> None:
         update_module.sys.platform = old_platform
 
 
+async def check_asset_download_falls_back_to_mirror_source() -> None:
+    """GitHub API 可达但资源域名被阻断时，包与签名文件改从 Gitee 同版本 Release 下载。"""
+    from src.gongju import update as update_module
+    from src.gongju.update import UpdateAsset, Updater
+
+    with tempfile.TemporaryDirectory(prefix="dzfyq_mirror_dl_") as temp:
+        old_home = os.environ.get("DZFYQ_HOME")
+        os.environ["DZFYQ_HOME"] = temp
+        try:
+            updater = Updater()
+            updater.latest_version = "1.2.12"
+            updater.active_update_source = updater.update_sources[0]
+            full_name = "dazuofanyiguan_full.for.windows_1.2.12.zip"
+            payload = b"hello"
+            sig_payload = {
+                "filename": full_name,
+                "app_version": "1.2.12",
+                "package_type": "windows_full_update",
+                "platform": "windows",
+                "size_bytes": len(payload),
+                "sha256": "a" * 64,
+                "signature": "A" * 88,
+            }
+            gitee_release = {
+                "tag_name": "v1.2.12",
+                "body": "",
+                "assets": [
+                    {"name": full_name, "size": len(payload), "browser_download_url": "full-gitee"},
+                    {
+                        "name": f"{full_name}.sig.json",
+                        "size": 300,
+                        "browser_download_url": "sig-gitee",
+                    },
+                ],
+            }
+            responses = {
+                "full-github": _FakeResponse(status=404),
+                "sig-github": _FakeResponse(status=403),
+                updater.gitee_api: _FakeResponse(json_payload=gitee_release),
+                "full-gitee": _FakeResponse(
+                    body=payload, headers={"content-length": str(len(payload))}
+                ),
+                "sig-gitee": _FakeResponse(body=json.dumps(sig_payload).encode()),
+            }
+            session = _FakeSession(responses)
+            asset = UpdateAsset(
+                name=full_name,
+                url="full-github",
+                size_bytes=len(payload),
+                package_type="windows_full_update",
+                signature="A" * 88,
+            )
+            target = Path(temp) / "download.zip"
+            await updater._download_asset_to_path(session, asset, str(target))
+            assert target.read_bytes() == payload
+
+            assets_by_name = {
+                full_name.lower(): {
+                    "name": full_name,
+                    "size": len(payload),
+                    "browser_download_url": "full-github",
+                },
+                f"{full_name}.sig.json".lower(): {
+                    "name": f"{full_name}.sig.json",
+                    "browser_download_url": "sig-github",
+                },
+            }
+            metadata = await updater._read_signature_metadata(
+                session,
+                assets_by_name,
+                assets_by_name[full_name.lower()],
+                expected_package_type="windows_full_update",
+                expected_target_version="1.2.12",
+            )
+            assert metadata == {
+                "signature": "A" * 88,
+                "sha256": "a" * 64,
+                "size_bytes": len(payload),
+            }
+
+            # 镜像版本与目标版本不一致时不得使用镜像资源
+            gitee_release["tag_name"] = "v1.2.11"
+            target.unlink()
+            try:
+                await updater._download_asset_to_path(session, asset, str(target))
+            except RuntimeError as error:
+                assert "404" in str(error), error
+            else:
+                raise AssertionError("mismatched mirror version was accepted")
+            assert not target.exists()
+
+            # 镜像资源大小与发布信息不一致时也要跳过
+            gitee_release["tag_name"] = "v1.2.12"
+            gitee_release["assets"][0]["size"] = len(payload) + 1
+            try:
+                await updater._download_asset_to_path(session, asset, str(target))
+            except RuntimeError as error:
+                assert "404" in str(error), error
+            else:
+                raise AssertionError("mirror asset with wrong size was accepted")
+        finally:
+            if old_home is None:
+                os.environ.pop("DZFYQ_HOME", None)
+            else:
+                os.environ["DZFYQ_HOME"] = old_home
+
+
 async def check_delta_failure_falls_back_before_complete() -> None:
     from src.gongju import update as update_module
     from src.gongju.update import UpdateAsset, Updater
@@ -666,7 +773,12 @@ def check_delta_rebuild_rejects_reparse_output() -> None:
             assert marker.read_text(encoding="utf-8") == "keep"
         finally:
             if os.path.lexists(output):
-                os.rmdir(output)
+                if os.name == "nt":
+                    # Windows junction：按目录删除，不会影响目标目录内容
+                    os.rmdir(output)
+                else:
+                    # POSIX 符号链接：必须 unlink，rmdir 会抛 NotADirectoryError
+                    os.unlink(output)
 
 
 async def check_signature_metadata_size_limit() -> None:
@@ -924,6 +1036,42 @@ def check_google_falls_back_to_secondary_endpoint() -> None:
             raise AssertionError("expected rate limited error")
 
     asyncio.run(scenario())
+
+    # 主接口域名超时/连不上时仍要尝试备用接口（分流代理、DNS 故障等场景）
+    api3 = GoogleAPI()
+
+    def primary_unreachable():
+        raise asyncio.TimeoutError()
+
+    api3.session = _RoutedSession(
+        [
+            (GoogleAPI.PRIMARY_URL, primary_unreachable),
+            (GoogleAPI.FALLBACK_URL, lambda: _JsonResponse(payload=[["你好", "en"]])),
+        ]
+    )
+
+    async def scenario_timeout():
+        await api3.health_check()
+        assert api3._prefer_fallback is True
+        assert (await api3.fanyi("hello", "自动检测", "简体中文")) == ("你好", "en")
+
+    asyncio.run(scenario_timeout())
+
+    api4 = GoogleAPI()
+    api4.session = _RoutedSession(
+        [
+            (GoogleAPI.PRIMARY_URL, primary_unreachable),
+            (GoogleAPI.FALLBACK_URL, primary_unreachable),
+        ]
+    )
+    try:
+        asyncio.run(api4.health_check())
+    except TranslationServiceError as error:
+        assert error.kind == "network_blocked", error.kind
+        assert "海外网站" in str(error)
+    else:
+        raise AssertionError("expected network_blocked error")
+
     assert GoogleAPI.parse_fallback_response(["こんにちは"], False) == ("こんにちは", None)
     assert GoogleAPI.parse_primary_response([[["你好", "hello", None, None]], None, "en"]) == ("你好", "en")
 
@@ -1070,6 +1218,30 @@ def check_microsoft_web_translation_flow() -> None:
     azure = MicrosoftAPI(api_key="k" * 32, region="eastasia")
     assert azure.mode == "azure"
 
+    # 分段边界的空格/换行必须保留：服务端返回去掉首尾空白的译文时不能把相邻分段粘连
+    from src.gongju.fanyi_api import microsoft as microsoft_module
+
+    sep_api = MicrosoftAPI()
+    seen_chunks = []
+
+    async def fake_chunk(chunk_text, _source, _target):
+        seen_chunks.append(chunk_text)
+        assert chunk_text == chunk_text.strip(), repr(chunk_text)
+        return f"T{chunk_text}", "en"
+
+    sep_api._translate_web_chunk = fake_chunk
+    old_limit = microsoft_module.WEB_CHUNK_LIMIT
+    microsoft_module.WEB_CHUNK_LIMIT = 40
+    try:
+        source_text = "Hello world. " * 6 + "\n\n" + "Second paragraph here. " * 4
+        joined, _ = asyncio.run(sep_api._translate_text(source_text, "en", "zh-Hans"))
+    finally:
+        microsoft_module.WEB_CHUNK_LIMIT = old_limit
+    assert len(seen_chunks) > 2, seen_chunks
+    assert "world.T" not in joined and ".T" not in joined, joined
+    assert "\n\n" in joined, repr(joined)
+    assert joined.count("THello") + joined.count("TSecond") == len(seen_chunks), joined
+
     chunks = split_text_for_translation("句子一。" * 400, WEB_CHUNK_LIMIT)
     assert all(len(chunk) <= WEB_CHUNK_LIMIT for chunk in chunks)
     assert "".join(chunks) == "句子一。" * 400
@@ -1124,6 +1296,8 @@ def main() -> int:
     print("ok delta_asset_selection_and_threshold")
     asyncio.run(check_update_source_falls_back_to_gitee())
     print("ok update_source_falls_back_to_gitee")
+    asyncio.run(check_asset_download_falls_back_to_mirror_source())
+    print("ok asset_download_falls_back_to_mirror_source")
     asyncio.run(check_delta_failure_falls_back_before_complete())
     print("ok delta_failure_falls_back_before_complete")
     check_delta_signature_rejects_tampering()

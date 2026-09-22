@@ -206,9 +206,8 @@ class GoogleAPI(FanYiJieKou):
                 )
                 if first_error is None:
                     first_error = described
-                # 网络完全不可达时，两个域名都不会通，直接报告即可
-                if getattr(described, "kind", "") == "network_blocked":
-                    raise described
+                # 一个域名超时/连不上不代表另一个也不通（分流代理、DNS 故障、单点故障），
+                # 继续尝试另一接口；两者都失败时报告首个错误。
         assert first_error is not None
         raise first_error
 
