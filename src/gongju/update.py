@@ -378,7 +378,12 @@ class Updater(QObject):
         return candidates
 
     async def _fetch_small_asset(self, session, url: str, package_name: str) -> bytes:
-        async with session.get(url) as response:
+        # 签名元数据很小，用与 Release API 相同的短超时，避免资源域名被阻断时
+        # 长时间等待（会话默认超时可达 5 分钟），以便尽快切换到镜像源。
+        async with session.get(
+            url,
+            timeout=aiohttp.ClientTimeout(total=UPDATE_SOURCE_TIMEOUT_SECONDS),
+        ) as response:
             if response.status != 200:
                 raise RuntimeError(
                     f"下载签名元数据失败：HTTP {response.status}，文件 {package_name}"

@@ -378,6 +378,34 @@ def _read_installed_version(install_dir: Path) -> str:
     return normalize_version(payload.get("app_version"))
 
 
+def _copy_and_verify(source: Path, destination: Path, record: FileRecord) -> None:
+    """边复制边哈希，确保写入重建目录的字节与签名清单一致。
+
+    _find_matching_source 只证明“哈希时”的内容匹配；若文件在哈希与复制之间被修改
+    （例如并发的引擎更新），复制得到的内容就未经校验。这里对实际写出的字节再校验一次。
+    """
+    digest = hashlib.sha256()
+    size = 0
+    with source.open("rb") as reader, destination.open("wb") as writer:
+        while True:
+            chunk = reader.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            digest.update(chunk)
+            writer.write(chunk)
+    if size != record.size_bytes or digest.hexdigest().lower() != record.sha256:
+        try:
+            destination.unlink()
+        except OSError:
+            pass
+        raise DeltaPackageError(f"已安装文件在重建过程中发生变化：{record.path}")
+    try:
+        shutil.copystat(source, destination)
+    except OSError:
+        pass
+
+
 def _find_matching_source(
     install_dir: Path,
     record: FileRecord,
@@ -471,7 +499,7 @@ def reconstruct_delta_package(
                     continue
 
                 source = _find_matching_source(install_root, record)
-                shutil.copy2(source, destination)
+                _copy_and_verify(source, destination, record)
 
         actual_paths = []
         for path in output_root.rglob("*"):

@@ -137,6 +137,36 @@ def check_delta_generation_and_reconstruction() -> None:
         else:
             raise AssertionError("modified installed file was accepted")
 
+        # 文件在“哈希通过”与“复制”之间被改动（TOCTOU）：复制出的字节必须再次校验
+        (install / "keep.txt").write_bytes(b"same")
+        from src.gongju import update_delta as update_delta_module
+
+        original_finder = update_delta_module._find_matching_source
+
+        def racing_finder(install_dir, record):
+            source = original_finder(install_dir, record)
+            if record.path == "keep.txt":
+                source.write_bytes(b"swapped-after-hash")
+            return source
+
+        update_delta_module._find_matching_source = racing_finder
+        try:
+            try:
+                reconstruct_delta_package(
+                    delta,
+                    install_dir=install,
+                    output_dir=rebuilt,
+                    expected_base_version="1.2.10",
+                    expected_target_version="1.2.11",
+                )
+            except DeltaPackageError as error:
+                assert "重建过程中发生变化" in str(error), str(error)
+            else:
+                raise AssertionError("file swapped after hashing was accepted")
+            assert not rebuilt.exists() or not any(rebuilt.rglob("*"))
+        finally:
+            update_delta_module._find_matching_source = original_finder
+
 
 def check_delta_case_only_rename_is_not_recorded_as_removal() -> None:
     """仅大小写变化的文件名不能同时出现在 removed_files 与 target_files 中。"""
@@ -256,6 +286,7 @@ class _FakeResponse:
 class _FakeSession:
     def __init__(self, responses):
         self.responses = responses
+        self.get_calls = []
 
     async def __aenter__(self):
         return self
@@ -264,6 +295,7 @@ class _FakeSession:
         return False
 
     def get(self, url, **kwargs):
+        self.get_calls.append((url, kwargs))
         try:
             return self.responses[url]
         except KeyError as error:
@@ -476,6 +508,11 @@ async def check_asset_download_falls_back_to_mirror_source() -> None:
                 "sha256": "a" * 64,
                 "size_bytes": len(payload),
             }
+            # 签名元数据请求必须带短超时，否则资源域名被阻断时无法及时切换镜像
+            for url, kwargs in session.get_calls:
+                if url in ("sig-github", "sig-gitee"):
+                    timeout = kwargs.get("timeout")
+                    assert timeout is not None and 0 < float(timeout.total) <= 30, (url, kwargs)
 
             # 镜像版本与目标版本不一致时不得使用镜像资源
             gitee_release["tag_name"] = "v1.2.11"
