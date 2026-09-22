@@ -740,7 +740,12 @@ def check_popen_failure_clears_pending():
             assert "function Get-OriginalProcess" in script_text
             assert "StartTime.ToUniversalTime().ToFileTimeUtc()" in script_text
             assert "$copyMode /IS /R:3" in script_text
-            assert int(launch_env["DZFYQ_UPDATE_PROCESS_CREATED_FILETIME"]) > 0
+            created_filetime = int(launch_env["DZFYQ_UPDATE_PROCESS_CREATED_FILETIME"])
+            if os.name == "nt":
+                assert created_filetime > 0
+            else:
+                # 非 Windows 平台 _current_process_creation_filetime 明确返回 0
+                assert created_filetime == 0
             assert not Path(updater._pending_update_path()).exists()
 
             popen_mock.reset_mock()

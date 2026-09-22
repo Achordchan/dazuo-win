@@ -1530,9 +1530,16 @@ catch {
                     try:
                         await self._download_asset_to_path(session, asset, temp_path)
                         logger.info("更新文件下载完成: %s", temp_path)
-                        self._verify_downloaded_package(temp_path)
+                        # 完整校验与增量重建要读写整个安装目录，放到工作线程执行，
+                        # 避免长时间阻塞 GUI 事件循环。
+                        loop = asyncio.get_running_loop()
+                        await loop.run_in_executor(
+                            None, self._verify_downloaded_package, temp_path
+                        )
                         if asset.package_type == DELTA_PACKAGE_TYPE:
-                            self._prepare_delta_update_source(temp_path)
+                            await loop.run_in_executor(
+                                None, self._prepare_delta_update_source, temp_path
+                            )
                         last_error = None
                         self.update_complete.emit(temp_path)
                         return
