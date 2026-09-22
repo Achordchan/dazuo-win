@@ -44,6 +44,16 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      # Nuitka 缓存目录含 mingw64/ccache 工具链下载与 C 编译缓存。
+      # 命中缓存后只重编译改动过的模块，构建时间可从 20+ 分钟降到几分钟。
+      - name: Cache Nuitka toolchain and ccache
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\Nuitka\Nuitka\Cache
+          key: nuitka-${{ runner.os }}-py3.11-nuitka2.8.9-${{ hashFiles('requirements.txt', 'src/**/*.py') }}
+          restore-keys: |
+            nuitka-${{ runner.os }}-py3.11-nuitka2.8.9-
+
       - name: Install dependencies
         shell: pwsh
         run: |
