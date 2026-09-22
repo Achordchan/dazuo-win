@@ -6,6 +6,8 @@ param(
     [int]$TimeoutSeconds = 180,
     [switch]$WithEngineLock,
     [switch]$UseCurrentUpdater,
+    [string]$PackageType = "windows_full_update",
+    [string]$BaseVersion = "",
     [switch]$ExpectFailure,
     [switch]$KeepTemp
 )
@@ -72,6 +74,8 @@ $oldRepoRoot = $env:DZFYQ_REPO_ROOT
 $oldTargetExe = $env:DZFYQ_TARGET_EXE
 $oldNewZip = $env:DZFYQ_NEW_ZIP
 $oldExpectedVersion = $env:DZFYQ_EXPECTED_VERSION
+$oldPackageType = $env:DZFYQ_PACKAGE_TYPE
+$oldBaseVersion = $env:DZFYQ_BASE_VERSION
 $oldOldUpdate = $env:DZFYQ_OLD_UPDATE
 
 try {
@@ -96,8 +100,10 @@ try {
     $helperPath = Join-Path $WorkDir "run_old_updater.py"
     if ($UseCurrentUpdater) {
         @'
+import json
 import os
 import sys
+from pathlib import Path
 
 repo_root = os.environ["DZFYQ_REPO_ROOT"]
 sys.path.insert(0, repo_root)
@@ -106,12 +112,29 @@ sys.executable = os.environ["DZFYQ_TARGET_EXE"]
 
 from src.gongju.update import Updater
 
+package = Path(os.environ["DZFYQ_NEW_ZIP"])
+signature = json.loads(
+    Path(str(package) + ".sig.json").read_text(encoding="utf-8-sig")
+)
 updater = Updater()
+updater._is_process_elevated = lambda: False
 updater.latest_version = os.environ.get("DZFYQ_EXPECTED_VERSION", "1.2.5")
-updater.install_update(os.environ["DZFYQ_NEW_ZIP"])
+updater.selected_package_type = os.environ.get(
+    "DZFYQ_PACKAGE_TYPE",
+    "windows_full_update",
+)
+updater.selected_base_version = os.environ.get("DZFYQ_BASE_VERSION", "")
+updater.release_signature = signature["signature"]
+updater.expected_asset_name = signature["filename"]
+updater.expected_package_sha256 = signature["sha256"]
+updater.expected_package_size = int(signature["size_bytes"])
+updater.install_update(str(package))
 '@ | Set-Content -LiteralPath $helperPath -Encoding UTF8
     }
     else {
+        if ($PackageType -ne "windows_full_update") {
+            throw "Legacy updater smoke does not support package type $PackageType."
+        }
         $oldUpdatePath = Join-Path $WorkDir "update_v1_2_4.py"
         git -C $RepoRoot show "v1.2.4:src/gongju/update.py" | Set-Content -LiteralPath $oldUpdatePath -Encoding UTF8
         if (-not (Test-Path -LiteralPath $oldUpdatePath -PathType Leaf)) {
@@ -148,6 +171,8 @@ updater.install_update(os.environ["DZFYQ_NEW_ZIP"])
     $env:DZFYQ_TARGET_EXE = $targetExe.FullName
     $env:DZFYQ_NEW_ZIP = $NewZip
     $env:DZFYQ_EXPECTED_VERSION = $ExpectedVersion
+    $env:DZFYQ_PACKAGE_TYPE = $PackageType
+    $env:DZFYQ_BASE_VERSION = $BaseVersion
     New-Item -ItemType Directory -Force -Path $env:APPDATA, $env:LOCALAPPDATA | Out-Null
 
     & $Python $helperPath
@@ -264,6 +289,8 @@ finally {
     $env:DZFYQ_TARGET_EXE = $oldTargetExe
     $env:DZFYQ_NEW_ZIP = $oldNewZip
     $env:DZFYQ_EXPECTED_VERSION = $oldExpectedVersion
+    $env:DZFYQ_PACKAGE_TYPE = $oldPackageType
+    $env:DZFYQ_BASE_VERSION = $oldBaseVersion
     if ($null -eq $oldOldUpdate) {
         Remove-Item Env:\DZFYQ_OLD_UPDATE -ErrorAction SilentlyContinue
     }

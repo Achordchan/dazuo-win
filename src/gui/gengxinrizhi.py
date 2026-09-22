@@ -3,7 +3,7 @@ from PyQt5.QtCore import Qt
 import os
 
 from .themes import ThemeManager
-from .dialog_utils import install_chinese_context_menu
+from .dialog_utils import get_theme_key, install_chinese_context_menu
 
 class GengXinRiZhi(QDialog):
     def __init__(self, parent=None):
@@ -24,15 +24,14 @@ class GengXinRiZhi(QDialog):
         self.text_browser.setOpenExternalLinks(True)
         install_chinese_context_menu(self.text_browser)
 
-        if parent is not None and hasattr(parent, "config"):
-            theme_key = parent.config.get("theme", "dark")
-            theme_map = {
-                "dark": "深色主题",
-                "light": "浅色主题",
-                "pink": "粉色主题",
-            }
-            display_name = theme_map.get(theme_key, "深色主题")
-            self.setStyleSheet(ThemeManager.get_theme_style(display_name))
+        theme_key = get_theme_key(self)
+        theme_map = {
+            "dark": "深色主题",
+            "light": "浅色主题",
+            "pink": "粉色主题",
+        }
+        display_name = theme_map.get(theme_key, "深色主题")
+        self.setStyleSheet(ThemeManager.get_theme_style(display_name))
         
         # 读取更新日志文件
         changelog_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'ziyuan', 'changelog.md')
@@ -44,7 +43,6 @@ class GengXinRiZhi(QDialog):
         # 创建确定按钮
         self.ok_button = QPushButton("确定")
         self.ok_button.setObjectName("changelogOk")
-        self.ok_button.setFixedHeight(36)
         self.ok_button.clicked.connect(self.accept)
         
         # 添加组件到布局

@@ -123,6 +123,7 @@ class UpdateCoordinator:
         self._modal_dialog_active = False
         self._pending_update_prompt = None
         self._update_operation_active = False
+        self._feedback_owner = None
 
         self.updater.update_available.connect(self.on_update_available)
         self.updater.update_progress.connect(self.on_update_progress)
@@ -133,7 +134,7 @@ class UpdateCoordinator:
         if not os.path.exists(path):
             return None
         try:
-            with open(path, "r", encoding="utf-8") as file:
+            with open(path, "r", encoding="utf-8-sig") as file:
                 payload = json.load(file)
             return payload if isinstance(payload, dict) else {}
         except Exception as error:
@@ -147,7 +148,9 @@ class UpdateCoordinator:
 
     def report_previous_update_state(self):
         result = self._consume_json_state(self.updater._last_update_result_path())
-        if result and result.get("status") == "failed":
+        if result and result.get("status") == "success":
+            self.updater._prune_update_backups()
+        elif result and result.get("status") == "failed":
             log_path = result.get("log_path") or ""
             message = result.get("message") or "更新替换脚本未返回具体错误。"
             show_themed_message(
@@ -236,10 +239,14 @@ class UpdateCoordinator:
                     self._show_latest_hint("当前已是最新版本")
             finally:
                 self._update_checking = False
+                self._feedback_owner = None
 
         asyncio.get_event_loop().create_task(run())
 
-    def check_update_with_message(self):
+    def check_update_with_message(self, feedback_owner=None):
+        if self._update_checking or self._update_operation_active:
+            return
+        self._feedback_owner = feedback_owner
         self.check_update(show_no_update_message=True)
 
     def on_update_available(self, version, notes, force_update):
@@ -257,10 +264,10 @@ class UpdateCoordinator:
         self._handle_update_available(version, notes, force_update)
 
     def _handle_update_available(self, version, notes, force_update):
-        if getattr(self.updater, "force_update_requested", False):
-            self._start_update_download()
-            return
-        self._show_update_prompt(version, notes, force_update)
+        requested_force_update = bool(
+            force_update or getattr(self.updater, "force_update_requested", False)
+        )
+        self._show_update_prompt(version, notes, requested_force_update)
 
     def _show_update_prompt(self, version, notes, force_update):
         self._modal_dialog_active = True
@@ -436,17 +443,19 @@ class UpdateCoordinator:
         self.progress_dialog.raise_()
 
     def _show_latest_hint(self, message: str):
-        if hasattr(self.owner, "check_update_button"):
+        feedback_owner = getattr(self, "_feedback_owner", None) or self.owner
+        if hasattr(feedback_owner, "check_update_button"):
             try:
-                pos = self.owner.check_update_button.mapToGlobal(self.owner.check_update_button.rect().center())
-                QToolTip.showText(pos, message, self.owner.check_update_button, self.owner.check_update_button.rect(), 3000)
+                button = feedback_owner.check_update_button
+                pos = button.mapToGlobal(button.rect().center())
+                QToolTip.showText(pos, message, button, button.rect(), 3000)
             except Exception:
                 pass
 
-        if hasattr(self.owner, "update_status_label"):
+        if hasattr(feedback_owner, "update_status_label"):
             try:
-                self.owner.update_status_label.setText(f"✔ {message}")
-                self.owner.update_status_label.show()
+                feedback_owner.update_status_label.setText(message)
+                feedback_owner.update_status_label.show()
             except Exception:
                 pass
 
@@ -493,5 +502,5 @@ def on_update_progress(owner, progress):
     ensure_update_coordinator(owner).on_update_progress(progress)
 
 
-def check_update_with_message(owner):
-    ensure_update_coordinator(owner).check_update_with_message()
+def check_update_with_message(owner, feedback_owner=None):
+    ensure_update_coordinator(owner).check_update_with_message(feedback_owner=feedback_owner)

@@ -64,3 +64,9 @@ if errorlevel 1 exit /b 1
 echo Verifying Windows full update package structure and embedded public-key signature...
 python tools\verify_windows_package.py output\dazuofanyiguan_full.for.windows_%VERSION%.zip %VERSION%
 if errorlevel 1 exit /b 1
+
+if defined DZFYQ_DELTA_BASE_ZIP (
+  echo Creating, signing, and verifying Windows delta update package...
+  python tools\build_windows_delta.py "%DZFYQ_DELTA_BASE_ZIP%" output\dazuofanyiguan_full.for.windows_%VERSION%.zip --private-key "%DZFYQ_UPDATE_PRIVATE_KEY%"
+  if errorlevel 1 exit /b 1
+)

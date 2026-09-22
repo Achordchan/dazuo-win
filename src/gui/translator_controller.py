@@ -2,14 +2,21 @@ import asyncio
 import copy
 import logging
 
-from src.gongju.fanyi import sanitize_error_message
-from src.gongju.fanyi_factory import build_translation_api
+from src.gongju.fanyi import error_kind, error_short_label, sanitize_error_message
+from src.gongju.fanyi_factory import SERVICE_DISPLAY_NAMES, build_translation_api
 
 logger = logging.getLogger(__name__)
 
 def _snapshot_translation_config(config, api_name):
     snapshot = {"translation.api": api_name}
-    if api_name == "deepl":
+    if api_name == "microsoft":
+        snapshot.update(
+            {
+                "microsoft.api_key": config.get("microsoft.api_key", ""),
+                "microsoft.region": config.get("microsoft.region", ""),
+            }
+        )
+    elif api_name == "deepl":
         snapshot.update(
             {
                 "deepl.api_key": config.get("deepl.api_key", ""),
@@ -71,17 +78,68 @@ def _restore_translation_config(config, snapshot) -> bool:
         return True
 
 
-def update_service_display(self):
-    api_name = self.config.get("translation.api", "google")
+def service_display_name(config, api_name=None) -> str:
+    api_name = api_name or config.get("translation.api", "google")
     if api_name == "openai_compat":
-        vendor = self.config.get("openai_compat.vendor", "OpenAI")
-        self.service_display.setText(f"{vendor}")
-    elif api_name == "deepl":
-        self.service_display.setText("DeepL")
-    elif api_name == "achord_builtin":
-        self.service_display.setText("Achord 内置引擎")
-    else:
-        self.service_display.setText("Google")
+        return str(config.get("openai_compat.vendor", "OpenAI"))
+    return SERVICE_DISPLAY_NAMES.get(api_name, "Google")
+
+
+def update_service_display(self):
+    self.service_display.setText(service_display_name(self.config))
+
+
+def _infer_error_kind(error, error_msg: str) -> str:
+    kind = error_kind(error) if error is not None else "unknown"
+    if kind != "unknown":
+        return kind
+    text = error_msg or ""
+    if "海外网站" in text or "无法直接访问" in text:
+        return "network_blocked"
+    if "429" in text or "过于频繁" in text or "限制了当前网络" in text or "访问被拒" in text:
+        return "rate_limited"
+    if "超时" in text:
+        return "timeout"
+    if "API密钥" in text or "API Key" in text or "认证失败" in text:
+        return "auth"
+    if "未连接" in text or "尚未连接" in text or "正在连接" in text:
+        return "not_connected"
+    if "无法连接" in text or "网络错误" in text or "代理" in text:
+        return "network"
+    if "配置不完整" in text or "未设置" in text:
+        return "config"
+    return "unknown"
+
+
+def _set_error_status(status_indicator, label: str, detail: str) -> None:
+    """状态栏显示简短标签；旧版/测试用的状态组件可能不支持 detail 参数。"""
+    try:
+        status_indicator.set_status("error", label, detail=detail)
+    except TypeError:
+        status_indicator.set_status("error", label)
+
+
+def status_label_for_error(error, error_msg: str, prefix: str = "连接失败") -> str:
+    """状态栏只有很窄的空间，用简短标签概括失败原因；完整信息放在提示气泡和 tooltip。"""
+    kind = _infer_error_kind(error, error_msg)
+    if kind == "network_blocked":
+        return f"{prefix}：需海外网络"
+    if kind == "rate_limited":
+        return f"{prefix}：请求受限"
+    if kind == "timeout":
+        return f"{prefix}：超时"
+    if kind == "auth":
+        return "未设置或密钥无效"
+    if kind == "config":
+        return "配置不完整"
+    if kind == "not_connected":
+        return "服务未连接"
+    if kind == "server":
+        return f"{prefix}：服务异常"
+    if kind == "network":
+        return f"{prefix}：网络不可达"
+    short = error_short_label(error, "") if error is not None else ""
+    return f"{prefix}：{short}" if short else prefix
 
 
 def retry_connection(self):
@@ -99,6 +157,7 @@ async def init_translation_api(self):
 def _translation_error_secrets(self, api=None):
     secrets = [
         self.config.get("deepl.api_key", ""),
+        self.config.get("microsoft.api_key", ""),
         self.config.get("openai_compat.api_key", ""),
     ]
     if api is not None:
@@ -137,6 +196,8 @@ async def _init_translation_api(self):
 
             self.status_indicator.set_status("connecting", "正在连接...")
             update_service_display(self)
+            if hasattr(self.fanyi, "set_connection_state"):
+                self.fanyi.set_connection_state("connecting")
 
             # Build and validate the new API first; only then replace the live one.
             new_api = build_translation_api(self.config)
@@ -154,6 +215,8 @@ async def _init_translation_api(self):
                 self.fanyi.set_fanyi_jiekou(new_api, api_name=api_name)
 
             assigned = True
+            if hasattr(self.fanyi, "set_connection_state"):
+                self.fanyi.set_connection_state("connected")
             working_configs[api_name] = _snapshot_translation_config(self.config, api_name)
             self._last_working_translation_configs = working_configs
             if hasattr(self.config, "update_many"):
@@ -170,16 +233,23 @@ async def _init_translation_api(self):
 
         except Exception as error:
             error_msg = sanitize_error_message(error, _translation_error_secrets(self, new_api))
-            if "API密钥" in error_msg:
-                self.status_indicator.set_status("error", "未设置API密钥")
-            elif "无法连接" in error_msg or "网络错误" in error_msg:
-                self.status_indicator.set_status("error", "连接失败")
-            else:
-                self.status_indicator.set_status("error", "连接失败")
+            service_label = service_display_name(self.config, api_name)
+            _set_error_status(
+                self.status_indicator,
+                status_label_for_error(error, error_msg),
+                f"{service_label}：{error_msg}",
+            )
 
             logger.error("初始化翻译API出错: %s", error_msg)
             if hasattr(self, "tishi"):
-                self.tishi.showMessage(f"API连接失败: {error_msg}", type="error")
+                self.tishi.showMessage(f"{service_label}连接失败：{error_msg}", type="error")
+            # 记录失败原因：在用户点击“重试”或更换服务之前，翻译请求会直接提示该原因。
+            if hasattr(self.fanyi, "set_connection_state"):
+                if getattr(self.fanyi, "current_api_name", None) is None:
+                    self.fanyi.set_connection_state("error", error_msg)
+                else:
+                    # 旧服务仍然可用，继续使用它
+                    self.fanyi.set_connection_state("connected")
             # Keep the previously working service and restore its complete config.
             restored = False
             failed_service_config = working_configs.get(api_name)
@@ -211,7 +281,14 @@ async def _init_translation_api(self):
                     )
             update_service_display(self)
             if restored and getattr(self.fanyi, "current_api_name", None) == previous_api_name:
+                if hasattr(self.fanyi, "set_connection_state"):
+                    self.fanyi.set_connection_state("connected")
                 self.status_indicator.set_status("normal", "已连接")
+                if hasattr(self, "tishi"):
+                    self.tishi.showMessage(
+                        f"已继续使用 {service_display_name(self.config, previous_api_name)}。",
+                        type="info",
+                    )
         finally:
             if new_api is not None and not assigned:
                 try:

@@ -55,7 +55,8 @@ python tools\verify_windows_package.py output\dazuofanyiguan_full.for.windows_$v
 - macOS 使用 `DZFYQ-SIG-MACOS:<base64>`。两个平台必须各自签名，不能共用同一条 SIG。
 - `tools/sign_windows_update_package.py` 会按包文件名推断 platform/package_type，输出对应标记并写入 `*.sig.json`。
 - `build.bat` / `clean_and_build.bat` 在签名后会调用 `tools/verify_windows_package.py`：除检查包结构外，还会读取 `*.zip.sig.json`，用客户端内置公钥验证私钥是否匹配；密钥不匹配时构建失败。
-- 发布时把当前版本各平台标记都追加到 Gitee Release 更新说明；需要强制更新时再额外加 `update=1`。
+- 发布时把当前版本各平台标记都追加到 GitHub Release 更新说明；需要强制更新时再额外加 `update=1`。
+- 每个版本都要**同时在 GitHub 与 Gitee 发布同一版本（相同 ZIP、相同签名标记）**：旧客户端只认 Gitee，新客户端在 GitHub 不可达时回退 Gitee。见 3.1。
 
 > Windows 在线更新包会把内置引擎打成 `deeplx.exe.payload`，避免 1.2.4 旧更新器覆盖正在运行的 `deeplx.exe` 时回滚；新程序会在缺少 `deeplx.exe` 时自动从 payload 写入用户引擎缓存。
 
@@ -185,18 +186,39 @@ python tools/verify_update_signature.py \
   --print-sha256
 ```
 
-只有出现 signature-ok 后，才能将输出的 DZFYQ-SIG-MACOS:<base64> 标记写入对应的 Gitee Release 更新说明。
+只有出现 signature-ok 后，才能将输出的 DZFYQ-SIG-MACOS:<base64> 标记写入对应的 GitHub Release 更新说明。
 
 ---
 
 ## 3. 在线更新流程（当前实现）
 
 ### 3.1 更新源
-- 使用 Gitee Release 最新版本：
+- **主仓库与主更新源：GitHub**（`Achordchan/dazuo-win`）
+  `https://api.github.com/repos/Achordchan/dazuo-win/releases/latest`
+- **备用更新源：Gitee**（`Achordchan/dazuofanyiguan`，长期保留，仅作为发布镜像，不再作为代码主仓库）
   `https://gitee.com/api/v5/repos/Achordchan/dazuofanyiguan/releases/latest`
+- 客户端按顺序尝试：GitHub 返回非 200、超时（15 秒）或网络不可达时自动改用 Gitee；两者都失败时提示合并后的错误。
+- 更新源定义在 `src/gongju/update.py` 的 `DEFAULT_UPDATE_SOURCES`。
+
+#### 为什么要长期双端发布（必读）
+- 1.2.10 及更早的客户端**只认 Gitee**。如果某个版本没有发到 Gitee，这些用户永远收不到更新。
+- GitHub Release 资源在部分国内网络下载慢或失败。客户端在 GitHub 检查失败时会自动回退 Gitee，因此 Gitee 上必须有同版本的包。
+- 结论：**每个正式版本都要同时发布到 GitHub 和 Gitee**，代码只在 GitHub 维护，Gitee 只发 Release（可不同步代码）。
+
+#### 双端发布清单（每个版本都做）
+1. 用 `build.bat` 生成并签名 `dazuofanyiguan_full.for.windows_<version>.zip` 及同名 `.sig.json`（增量包同理）。
+2. **GitHub**：创建 Release `v<version>`，上传 ZIP 与 `.sig.json`，说明中写入 `DZFYQ-SIG-WINDOWS:<base64>`（以及兼容旧标记 `DZFYQ-SIG:<base64>`），需要强制更新再加 `update=1`：
+   ```powershell
+   gh release create v<version> --repo Achordchan/dazuo-win --title "v<version>" --notes-file notes.md `
+     output\dazuofanyiguan_full.for.windows_<version>.zip `
+     output\dazuofanyiguan_full.for.windows_<version>.zip.sig.json
+   ```
+3. **Gitee**：在 `Achordchan/dazuofanyiguan` 创建同名 Release `v<version>`，上传**同一个** ZIP 与 `.sig.json`（同一份文件，不能重新打包），说明中写入**同样**的签名标记。
+4. 发布后各用一个旧版本客户端验证：GitHub 可达时走 GitHub；断开 GitHub（或旧版 ≤1.2.10）时能从 Gitee 拿到新版本。
+5. 两端的 `tag_name`、包文件名、签名必须一致，否则客户端回退到 Gitee 时会因签名或大小不一致拒绝更新。
 
 ### 3.2 更新触发
-- 手动：设置页 “检测更新”
+- 手动：关于页顶部 “检测更新”
 - 自动：应用启动后延迟触发（主窗口内定时检查）
 
 ### 3.3 版本判断
@@ -209,24 +231,35 @@ python tools/verify_update_signature.py \
 - 缺少签名的更新包会被客户端拒绝
 
 ### 3.5 按平台选择安装包
-- macOS：选择 `.dmg`
-- Windows：只选择与 Release 版本精确匹配的 `dazuofanyiguan_full.for.windows_<version>.zip`
-- 若未找到对应资源，会提示错误
+- macOS：选择 DMG。
+- Windows：全量 ZIP 始终是必需兜底；当前版本精确匹配且至少节省 20% 时优先选择文件级增量 ZIP。
+- 增量签名 JSON 缺失、来源版本不符或元数据异常时直接使用全量包。
+- 未找到目标版本全量包时终止更新，不允许只发布增量包。
 
 ### 3.6 下载与安装行为
-- 更新包下载到 `~/.dzfyq/update_cache`
-- **macOS**：下载后打开 DMG，提示用户手动替换应用
-- **Windows**：下载 full zip 后解压到更新缓存目录，启动独立 PowerShell 替换脚本，当前程序退出
-- PowerShell 脚本会等待旧进程退出，备份当前安装目录到 `~/.dzfyq/update_backup`，再用全量目录覆盖安装并重启 `大佐翻译官.exe`
-- Windows 在线更新不会再启动 `.exe/.msi` 安装器；安装器仅用于首次安装或旧安装迁移
+- 更新包下载到用户目录下的 .dzfyq/update_cache。
+- macOS：下载后打开 DMG，提示用户手动替换应用。
+- Windows：用户确认后后台下载；增量包会先重建并校验完整目标目录。
+- PowerShell 脚本等待旧进程退出，备份安装目录，再镜像替换并重启大佐翻译官。
+- Windows 在线更新不会启动 EXE、MSI 安装器；安装器仅用于首次安装或旧安装迁移。
+
+
+### 3.7 Windows 文件级增量更新
+- 1.2.11 是桥接版本，仍通过全量包升级；从 1.2.11 到 1.2.12 开始正式使用增量包。
+- 增量包名称为 dazuofanyiguan_delta.for.windows_<base>_to_<target>.zip，并附带同名 .zip.sig.json。
+- Release 必须同时保留目标版本全量包；来源版本不匹配、签名或文件校验失败时自动改用全量包。
+- 仅当增量包至少比全量包小 20% 时才会被选中。
+- 构建时设置 DZFYQ_DELTA_BASE_ZIP 指向上一版本全量 ZIP，构建脚本会生成、签名并验证增量包。
+- Release 说明只写全量包 DZFYQ-SIG-WINDOWS 标记；增量签名从独立 .sig.json 读取。
 
 ---
 
 ## 4. 注意事项
 - 打包路径尽量使用英文路径，避免 Qt 插件路径异常
 - 打包前确保虚拟环境已安装全部依赖
-- 更新依赖 Gitee 可访问性
-- Windows 静默替换要求安装目录可写；新安装器默认使用当前用户目录，旧版本若安装在 Program Files，需先用新版安装器迁移一次
+- 更新依赖 GitHub（主）或 Gitee（备用镜像）可访问性；GitHub 在部分国内网络下载 Release 资源可能较慢或失败，因此每个版本都必须双端发布（见 3.1）
+- Windows 静默替换要求安装目录可写，并且程序必须以普通用户身份运行；管理员模式会拒绝静默更新。旧版本若安装在 Program Files，需先用新版安装器迁移到当前用户目录
+- 更新备份最多保留最近 2 份，避免长期升级持续占用磁盘空间
 - macOS 全局快捷键需要辅助功能权限
 
 ---

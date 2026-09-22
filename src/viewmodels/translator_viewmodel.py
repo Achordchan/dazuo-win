@@ -8,6 +8,9 @@ from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
 from ..gongju.fanyi import sanitize_error_message
 
+# 公共远程服务（无本地引擎）在 HTTP 429 后各自独立冷却。
+REMOTE_COOLDOWN_SERVICES = frozenset({"google", "microsoft", "deepl"})
+
 
 @dataclass(frozen=True)
 class TranslationContext:
@@ -44,7 +47,7 @@ class TranslatorViewModel(QObject):
         # AI-only short cooldown. Never shared with Google/DeepL/Achord.
         self._ai_rate_limit_cooldown_s = 2.0
         self._ai_rate_limit_until = 0.0
-        # Public Google/DeepL endpoints also need their own cooldown after 429.
+        # Public Google/Microsoft/DeepL endpoints also need their own cooldown after 429.
         self._remote_rate_limit_cooldown_s = 60.0
         self._remote_rate_limit_until: dict[str, float] = {}
 
@@ -172,7 +175,7 @@ class TranslatorViewModel(QObject):
         if name == "openai_compat":
             return max(0.0, float(self._ai_rate_limit_until) - time.monotonic())
 
-        if name in {"google", "deepl"}:
+        if name in REMOTE_COOLDOWN_SERVICES:
             return max(
                 0.0,
                 float(self._remote_rate_limit_until.get(name, 0.0)) - time.monotonic(),
@@ -224,7 +227,7 @@ class TranslatorViewModel(QObject):
             self._remote_rate_limit_cooldown_s if cooldown_s is None else cooldown_s
         )
         wait_s = max(1.0, wait_s)
-        if name in {"google", "deepl"}:
+        if name in REMOTE_COOLDOWN_SERVICES:
             self._remote_rate_limit_until[name] = max(
                 self._remote_rate_limit_until.get(name, 0.0),
                 time.monotonic() + wait_s,
@@ -241,7 +244,7 @@ class TranslatorViewModel(QObject):
             return 0.0
 
         name = str(api_name or "").strip()
-        if name in {"google", "deepl"}:
+        if name in REMOTE_COOLDOWN_SERVICES:
             self._note_remote_rate_limited(name)
         elif name == "openai_compat":
             self._note_ai_rate_limited()

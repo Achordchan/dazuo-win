@@ -450,7 +450,8 @@ class ZhuChuangKou(QMainWindow):
 
         service_container = QFrame()
         service_container.setObjectName('serviceStatusPill')
-        service_container.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        service_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        service_container.setMinimumWidth(0)
         service_layout = QHBoxLayout(service_container)
         service_layout.setContentsMargins(10, 4, 10, 4)
         service_layout.setSpacing(6)
@@ -466,9 +467,8 @@ class ZhuChuangKou(QMainWindow):
         service_layout.addWidget(self.service_display)
         self.status_indicator = ZhuangTaiZhiShiQi(compact=True)
         self.status_indicator.retry_button.clicked.connect(self._retry_connection)
-        service_layout.addWidget(self.status_indicator)
-        toolbar_layout.addWidget(service_container)
-        toolbar_layout.addStretch()
+        service_layout.addWidget(self.status_indicator, 1)
+        toolbar_layout.addWidget(service_container, 1)
 
         def create_toolbar_button(icon_name, tooltip, callback):
             button = QPushButton()
@@ -488,9 +488,19 @@ class ZhuChuangKou(QMainWindow):
             lambda: self._toggle_mini_mode(True, show_hint=True),
         )
         self.toolbar_settings_button = create_toolbar_button('settings', '设置', self._on_settings)
-        toolbar_layout.addWidget(self.toolbar_theme_button)
-        toolbar_layout.addWidget(self.toolbar_mini_button)
-        toolbar_layout.addWidget(self.toolbar_settings_button)
+        self.toolbar_actions = QWidget()
+        self.toolbar_actions.setObjectName('toolbarActions')
+        toolbar_actions_layout = QHBoxLayout(self.toolbar_actions)
+        toolbar_actions_layout.setContentsMargins(0, 0, 0, 0)
+        toolbar_actions_layout.setSpacing(8)
+        toolbar_actions_layout.addWidget(self.toolbar_theme_button)
+        toolbar_actions_layout.addWidget(self.toolbar_mini_button)
+        toolbar_actions_layout.addWidget(self.toolbar_settings_button)
+        # 右侧三个按钮固定宽度，任何状态文本都不能挤压它们。
+        actions_width = 3 * 34 + 2 * toolbar_actions_layout.spacing()
+        self.toolbar_actions.setFixedWidth(max(actions_width, self.toolbar_actions.sizeHint().width()))
+        self.toolbar_actions.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        toolbar_layout.addWidget(self.toolbar_actions, 0)
         content_layout.addWidget(toolbar)
 
         workspace = QWidget()
@@ -913,8 +923,8 @@ class ZhuChuangKou(QMainWindow):
     def _on_update_progress(self, progress):
         _update_controller.on_update_progress(self, progress)
 
-    def _check_update_with_message(self):
-        _update_controller.check_update_with_message(self)
+    def _check_update_with_message(self, feedback_owner=None):
+        _update_controller.check_update_with_message(self, feedback_owner=feedback_owner)
 
     def _fallback_window_top(self):
         """使用Qt的方式实现窗口置顶"""

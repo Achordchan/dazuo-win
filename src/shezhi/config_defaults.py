@@ -66,6 +66,10 @@ DEFAULT_CONFIG = {
         "api_key": "",
         "account_type": "",
     },
+    "microsoft": {
+        "api_key": "",
+        "region": "",
+    },
     "openai_compat": {
         "vendor": "智谱",
         "base_url": VENDOR_DEFAULTS["智谱"]["base_url"],
