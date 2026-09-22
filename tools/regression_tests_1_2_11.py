@@ -357,7 +357,7 @@ async def check_delta_asset_selection_and_threshold() -> None:
             "full-sig": _FakeResponse(body=json.dumps(full_sig).encode()),
             "delta-sig": _FakeResponse(body=json.dumps(delta_sig).encode()),
         }
-        update_module.aiohttp.ClientSession = lambda: _FakeSession(responses)
+        update_module.aiohttp.ClientSession = lambda **kwargs: _FakeSession(responses)
         assert await updater.check_update() is True
         assert updater.active_update_source.name == "GitHub"
         assert updater.selected_package_type == "windows_file_delta"
@@ -402,14 +402,14 @@ async def check_update_source_falls_back_to_gitee() -> None:
             updater.github_api: _FakeResponse(status=404, json_payload={"message": "Not Found"}),
             updater.gitee_api: _FakeResponse(json_payload=release),
         }
-        update_module.aiohttp.ClientSession = lambda: _FakeSession(responses)
+        update_module.aiohttp.ClientSession = lambda **kwargs: _FakeSession(responses)
         assert await updater.check_update() is True
         assert updater.active_update_source.name == "Gitee"
         assert updater.expected_asset_name == full_name
 
         # GitHub 网络不可达（无响应条目）→ 回退 Gitee
         responses = {updater.gitee_api: _FakeResponse(json_payload=release)}
-        update_module.aiohttp.ClientSession = lambda: _FakeSession(responses)
+        update_module.aiohttp.ClientSession = lambda **kwargs: _FakeSession(responses)
         assert await updater.check_update() is True
         assert updater.active_update_source.name == "Gitee"
 
@@ -420,7 +420,7 @@ async def check_update_source_falls_back_to_gitee() -> None:
             updater.github_api: _FakeResponse(status=403, json_payload={}),
             updater.gitee_api: _FakeResponse(status=404, json_payload={}),
         }
-        update_module.aiohttp.ClientSession = lambda: _FakeSession(responses)
+        update_module.aiohttp.ClientSession = lambda **kwargs: _FakeSession(responses)
         assert await updater.check_update() is False
         assert errors and "GitHub" in errors[-1] and "Gitee" in errors[-1], errors
         assert updater.active_update_source is None
@@ -584,7 +584,7 @@ async def check_delta_failure_falls_back_before_complete() -> None:
             errors = []
             updater.update_complete.connect(completed.append)
             updater.update_error.connect(errors.append)
-            update_module.aiohttp.ClientSession = lambda: _FakeSession({})
+            update_module.aiohttp.ClientSession = lambda **kwargs: _FakeSession({})
             await updater.download_update()
             assert attempts == ["windows_file_delta", "windows_full_update"]
             assert updater.selected_package_type == "windows_full_update"

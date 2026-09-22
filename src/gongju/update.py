@@ -421,7 +421,10 @@ class Updater(QObject):
             raise RuntimeError(f"签名元数据缺少下载地址：{package_name}")
         try:
             raw = await self._fetch_small_asset(session, signature_url, package_name)
-        except Exception as primary_error:
+        except Exception as error:
+            primary_error = error
+            if isinstance(error, asyncio.TimeoutError):
+                primary_error = RuntimeError(f"下载签名元数据超时：{package_name}")
             # 主源（如 GitHub 资源域名）不可达时，从镜像源取同名签名文件；内容校验不变。
             raw = None
             for candidate in await self._mirror_asset_candidates(
@@ -1231,7 +1234,7 @@ catch {
             self._fallback_full_asset = None
             self._clear_prepared_update_source()
             logger.info("开始检查更新...")
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(trust_env=True) as session:
                 try:
                     data = await self._fetch_latest_release(session)
                 except UpdateSourceError as error:
@@ -1525,7 +1528,7 @@ catch {
         temp_path = ""
         last_error = None
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(trust_env=True) as session:
                 for index, asset in enumerate(attempts):
                     self._activate_update_asset(asset)
                     temp_path = self._build_download_path(asset.suffix)
