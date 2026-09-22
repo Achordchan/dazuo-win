@@ -1,0 +1,201 @@
+name: Build and release (Windows)
+
+# 构建、签名、校验 Windows 全量/增量更新包与安装器，并创建 GitHub Release。
+# Gitee 镜像 Release 需要在本工作流完成后，用同一批产物与同一份 release_notes 手动/脚本发布
+# （见 PACKAGING_AND_UPDATE.md 3.1）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      delta_base_version:
+        description: "生成增量包所用的上一版本号（留空则不生成增量包）"
+        required: false
+        default: ""
+      publish_release:
+        description: "构建完成后创建 GitHub Release（false 仅上传 artifact）"
+        required: false
+        default: "true"
+      force_update:
+        description: "在 Release 说明中追加 update=1（强制更新）"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install "nuitka==2.8.9" "zstandard>=0.22" "ordered-set>=4.1"
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          python tools/sync_version.py
+          $version = (python -c "from src.version import APP_VERSION; print(APP_VERSION)").Trim()
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "APP_VERSION=$version"
+
+      - name: Run regression tests
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python tools/regression_tests_1_2_10.py
+          python tools/regression_tests_1_2_11.py
+
+      - name: Build with Nuitka
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python -m nuitka `
+            --standalone `
+            --windows-console-mode=disable `
+            --windows-file-version=$env:VERSION `
+            --windows-product-version=$env:VERSION `
+            --windows-company-name="大佐软件" `
+            --windows-product-name="大佐翻译官" `
+            --windows-file-description="大佐翻译官" `
+            --mingw64 `
+            --assume-yes-for-downloads `
+            --output-dir=dist_nuitka `
+            --output-filename="大佐翻译官.exe" `
+            --windows-icon-from-ico=src\ziyuan\logo.ico `
+            --enable-plugin=pyqt5 `
+            --include-package-data=qtawesome `
+            --include-qt-plugins=platforms,imageformats,styles `
+            --include-data-dir=src\ziyuan=src\ziyuan `
+            --include-data-dir=src\config=src\config `
+            --include-data-files=third_party\deeplx\windows\amd64\deeplx.exe=engines\deeplx\windows\amd64\deeplx.exe `
+            --include-data-dir=third_party\deeplx=engines\deeplx `
+            src\main.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Write update manifest and create full update package
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python tools/write_update_manifest.py dist_nuitka\main.dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force -Path output | Out-Null
+          python tools/create_windows_update_package.py dist_nuitka\main.dist "output\dazuofanyiguan_full.for.windows_$env:VERSION.zip"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Sign and verify full update package
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DZFYQ_UPDATE_PRIVATE_KEY_PEM: ${{ secrets.DZFYQ_UPDATE_PRIVATE_KEY_PEM }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DZFYQ_UPDATE_PRIVATE_KEY_PEM)) {
+            Write-Error "Secret DZFYQ_UPDATE_PRIVATE_KEY_PEM is not configured."
+            exit 1
+          }
+          # 私钥只写到 runner 临时目录（仓库外），任务结束后随 runner 销毁。
+          $keyPath = Join-Path $env:RUNNER_TEMP "update_ed25519_private.pem"
+          [System.IO.File]::WriteAllText($keyPath, $env:DZFYQ_UPDATE_PRIVATE_KEY_PEM)
+          "DZFYQ_UPDATE_PRIVATE_KEY=$keyPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          python tools/sign_windows_update_package.py "output\dazuofanyiguan_full.for.windows_$env:VERSION.zip" --version $env:VERSION --private-key $keyPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/verify_windows_package.py "output\dazuofanyiguan_full.for.windows_$env:VERSION.zip" $env:VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build delta update package
+        if: ${{ github.event.inputs.delta_base_version != '' }}
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BASE_VERSION: ${{ github.event.inputs.delta_base_version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $baseName = "dazuofanyiguan_full.for.windows_$env:BASE_VERSION.zip"
+          New-Item -ItemType Directory -Force -Path delta_base | Out-Null
+          gh release download "v$env:BASE_VERSION" --repo $env:GITHUB_REPOSITORY --pattern $baseName --dir delta_base
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Base package v$env:BASE_VERSION not found on GitHub Release; skipping delta package."
+            exit 0
+          }
+          python tools/build_windows_delta.py "delta_base\$baseName" "output\dazuofanyiguan_full.for.windows_$env:VERSION.zip" --private-key $env:DZFYQ_UPDATE_PRIVATE_KEY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build installer with Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc setup.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build release notes
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          FORCE_UPDATE: ${{ github.event.inputs.force_update }}
+        run: |
+          $args = @("--version", $env:VERSION, "--sig-json", "output\dazuofanyiguan_full.for.windows_$env:VERSION.zip.sig.json", "--output", "output\release_notes_$env:VERSION.md")
+          if ($env:FORCE_UPDATE -eq "true") { $args += "--force-update" }
+          python tools/build_release_notes.py @args
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: List artifacts
+        shell: pwsh
+        run: Get-ChildItem output | Format-Table Name, Length
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dazuofanyiguan-windows-${{ steps.version.outputs.version }}
+          path: |
+            output/*.zip
+            output/*.zip.sig.json
+            output/*.exe
+            output/release_notes_*.md
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: ${{ github.event.inputs.publish_release != 'false' }}
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:VERSION"
+          $assets = @(Get-ChildItem output -Include *.zip, *.zip.sig.json, *.exe -Recurse | ForEach-Object { $_.FullName })
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag exists; uploading assets (clobber) and refreshing notes."
+            gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber @assets
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --notes-file "output\release_notes_$env:VERSION.md"
+          } else {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title $tag --notes-file "output\release_notes_$env:VERSION.md" @assets
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

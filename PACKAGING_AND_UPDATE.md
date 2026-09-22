@@ -206,14 +206,14 @@ python tools/verify_update_signature.py \
 - 结论：**每个正式版本都要同时发布到 GitHub 和 Gitee**，代码只在 GitHub 维护，Gitee 只发 Release（可不同步代码）。
 
 #### 双端发布清单（每个版本都做）
-1. 用 `build.bat` 生成并签名 `dazuofanyiguan_full.for.windows_<version>.zip` 及同名 `.sig.json`（增量包同理）。
+1. **在 GitHub Actions 构建**（推荐）：仓库 Actions → “Build and release (Windows)” → Run workflow，填写 `delta_base_version`（上一版本号，如 `1.2.10`）。工作流会安装依赖、跑回归测试、用 Nuitka 构建、用仓库 Secret `DZFYQ_UPDATE_PRIVATE_KEY_PEM` 签名并验证、生成增量包与 Inno Setup 安装器、用 `tools/build_release_notes.py` 生成带签名标记的说明，并创建 GitHub Release。产物同时作为 artifact 保留 30 天。也可本地用 `build.bat` 构建。
 2. **GitHub**：创建 Release `v<version>`，上传 ZIP 与 `.sig.json`，说明中写入 `DZFYQ-SIG-WINDOWS:<base64>`（以及兼容旧标记 `DZFYQ-SIG:<base64>`），需要强制更新再加 `update=1`：
    ```powershell
    gh release create v<version> --repo Achordchan/dazuo-win --title "v<version>" --notes-file notes.md `
      output\dazuofanyiguan_full.for.windows_<version>.zip `
      output\dazuofanyiguan_full.for.windows_<version>.zip.sig.json
    ```
-3. **Gitee**：在 `Achordchan/dazuofanyiguan` 创建同名 Release `v<version>`，上传**同一个** ZIP 与 `.sig.json`（同一份文件，不能重新打包），说明中写入**同样**的签名标记。
+3. **Gitee**：从 GitHub Release 下载同一批产物（`gh release download v<version> --repo Achordchan/dazuo-win`），在 `Achordchan/dazuofanyiguan` 创建同名 Release `v<version>`，上传**同一个** ZIP、`.sig.json` 与安装器（同一份文件，不能重新打包），说明使用同一份 `release_notes_<version>.md`。
 4. 发布后各用一个旧版本客户端验证：GitHub 可达时走 GitHub；断开 GitHub（或旧版 ≤1.2.10）时能从 Gitee 拿到新版本。
 5. 两端的 `tag_name`、包文件名、签名必须一致，否则客户端回退到 Gitee 时会因签名或大小不一致拒绝更新。
 
