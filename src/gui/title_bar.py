@@ -1,6 +1,6 @@
 import os
 
-from PyQt5.QtWidgets import QScrollArea, QWidget, QHBoxLayout, QLabel, QPushButton, QDialog, QVBoxLayout, QFrame
+from PyQt5.QtWidgets import QScrollArea, QWidget, QHBoxLayout, QLabel, QPushButton, QDialog, QVBoxLayout, QFrame, QSizePolicy
 from PyQt5.QtWidgets import QGraphicsDropShadowEffect
 from PyQt5.QtCore import Qt, QSize, QUrl
 from PyQt5.QtGui import QDesktopServices, QIcon, QPixmap, QPainter, QPainterPath, QColor
@@ -8,6 +8,7 @@ from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkRepl
 
 from .dialog_utils import build_icon_button_stylesheet, build_link_button_stylesheet, get_dialog_palette, to_rgba
 from .icon_provider import themed_icon, resource_path
+from .gengxinrizhi import GengXinRiZhi
 from . import window_geometry as _window_geometry
 from ..version import APP_VERSION
 
@@ -21,6 +22,7 @@ class AboutDialog(QDialog):
         self.resize(620, 680)
         self.setMaximumSize(720, 900)
         self.setObjectName("aboutDialog")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         layout = QVBoxLayout(self)
@@ -29,6 +31,8 @@ class AboutDialog(QDialog):
 
         scroll = QScrollArea(self)
         scroll.setObjectName("aboutScroll")
+        scroll.viewport().setObjectName("aboutViewport")
+        scroll.viewport().setAttribute(Qt.WA_StyledBackground, True)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -36,6 +40,7 @@ class AboutDialog(QDialog):
 
         card = QFrame()
         card.setObjectName("aboutCard")
+        card.setAttribute(Qt.WA_StyledBackground, True)
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(24, 22, 24, 22)
         card_layout.setSpacing(16)
@@ -81,6 +86,35 @@ class AboutDialog(QDialog):
         summary_label.setWordWrap(True)
         header_text.addWidget(summary_label)
         header.addLayout(header_text, 1)
+
+        self.header_update_actions = QWidget()
+        self.header_update_actions.setObjectName("aboutHeaderActions")
+        self.header_update_actions.setFixedWidth(112)
+        header_actions_layout = QVBoxLayout(self.header_update_actions)
+        header_actions_layout.setContentsMargins(0, 2, 0, 0)
+        header_actions_layout.setSpacing(4)
+
+        self.check_update_button = QPushButton("检测更新")
+        self.check_update_button.setObjectName("aboutHeaderUpdateButton")
+        self.check_update_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.check_update_button.setCursor(Qt.PointingHandCursor)
+        self.check_update_button.clicked.connect(self._on_check_update_clicked)
+        header_actions_layout.addWidget(self.check_update_button)
+
+        self.changelog_button = QPushButton("更新说明")
+        self.changelog_button.setObjectName("aboutHeaderChangelogButton")
+        self.changelog_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.changelog_button.setCursor(Qt.PointingHandCursor)
+        self.changelog_button.clicked.connect(self._on_show_changelog)
+        header_actions_layout.addWidget(self.changelog_button)
+
+        self.update_status_label = QLabel("")
+        self.update_status_label.setObjectName("updateStatusLabel")
+        self.update_status_label.setAlignment(Qt.AlignCenter)
+        self.update_status_label.setVisible(False)
+        header_actions_layout.addWidget(self.update_status_label)
+
+        header.addWidget(self.header_update_actions, alignment=Qt.AlignTop)
         card_layout.addLayout(header)
 
         divider = QFrame()
@@ -92,7 +126,6 @@ class AboutDialog(QDialog):
             "项目信息",
             [
                 ("author", "作者", "Achord"),
-                ("version", "当前版本", f"v{APP_VERSION}"),
                 ("license", "软件许可", "MIT License"),
             ],
         )
@@ -119,8 +152,8 @@ class AboutDialog(QDialog):
         actions_layout = QHBoxLayout()
         actions_layout.setContentsMargins(0, 2, 0, 0)
         actions_layout.setSpacing(10)
-        actions_layout.addWidget(self._build_action_button("link", "项目地址", "https://gitee.com/Achordchan/dazuofanyiguan"))
-        actions_layout.addWidget(self._build_action_button("link", "问题反馈", "https://gitee.com/Achordchan/dazuofanyiguan/issues"))
+        actions_layout.addWidget(self._build_action_button("link", "项目地址", "https://github.com/Achordchan/dazuo-win"))
+        actions_layout.addWidget(self._build_action_button("link", "问题反馈", "https://github.com/Achordchan/dazuo-win/issues"))
         actions_layout.addStretch()
         close_button = QPushButton("关闭")
         close_button.setObjectName("aboutCloseButton")
@@ -138,6 +171,7 @@ class AboutDialog(QDialog):
     def _build_section(self, title: str, rows: list[tuple[str, str, str]]):
         section = QFrame()
         section.setObjectName("aboutSection")
+        section.setAttribute(Qt.WA_StyledBackground, True)
         layout = QVBoxLayout(section)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(9)
@@ -192,10 +226,49 @@ class AboutDialog(QDialog):
         button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(url)))
         return button
 
+    def _on_check_update_clicked(self):
+        self.update_status_label.hide()
+        handler = getattr(self._parent, "_check_update_with_message", None)
+        if callable(handler):
+            handler(feedback_owner=self)
+            return
+        self.update_status_label.setText("暂时无法检测更新")
+        self.update_status_label.show()
+
+    def _on_show_changelog(self):
+        dialog = GengXinRiZhi(self)
+        dialog.setModal(True)
+        dialog.exec_()
+
     def _theme_name(self):
         if self._parent and hasattr(self._parent, "config"):
             return self._parent.config.get("theme", "dark")
         return "dark"
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._apply_native_title_bar_theme()
+
+    def _apply_native_title_bar_theme(self):
+        if os.name != "nt":
+            return
+
+        try:
+            import ctypes
+
+            enabled = ctypes.c_int(1 if self._theme_name() == "dark" else 0)
+            hwnd = ctypes.c_void_p(int(self.winId()))
+            for attribute in (20, 19):
+                result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd,
+                    attribute,
+                    ctypes.byref(enabled),
+                    ctypes.sizeof(enabled),
+                )
+                if result == 0:
+                    break
+        except Exception:
+            return
 
     def _disable_context_menus(self):
         self.setContextMenuPolicy(Qt.NoContextMenu)
@@ -211,25 +284,43 @@ class AboutDialog(QDialog):
         link_hover = palette.secondary_hover
         self.setStyleSheet(
             f"#aboutDialog {{ background: {palette.background}; }}"
-            f"#aboutScroll {{ background: transparent; border: none; }}"
-            f"#aboutScroll > QWidget > QWidget {{ background: transparent; }}"
-            f"#aboutCard {{ background: {palette.surface}; border: 1px solid {palette.border}; border-radius: 16px; }}"
+            f"#aboutScroll {{ border: none; }}"
             f"#aboutAvatar {{ background: {soft_primary}; border-radius: 38px; border: 1px solid {soft_border}; }}"
             f"#aboutTitle {{ color: {palette.text}; font-size: 24px; font-weight: 700; padding: 0; }}"
             f"#aboutVersionBadge {{ background: {soft_primary}; color: {palette.primary}; border: 1px solid {soft_border}; border-radius: 10px; padding: 2px 9px; font-size: 14px; font-weight: 700; }}"
             f"#aboutSubtitle {{ color: {palette.text}; font-size: 15px; font-weight: 600; padding: 0; }}"
             f"#aboutSummary {{ color: {palette.text_secondary}; font-size: 14px; padding: 0; }}"
             f"#aboutDivider {{ color: {palette.border}; background: {palette.border}; max-height: 1px; border: none; }}"
-            f"#aboutSection {{ background: {muted_surface}; border: 1px solid {palette.border}; border-radius: 12px; }}"
             f"#aboutSectionTitle {{ color: {palette.text_secondary}; font-size: 14px; font-weight: 700; padding: 0; }}"
             f"#aboutInfoLabel {{ color: {palette.text_secondary}; font-size: 14px; padding: 0; }}"
             f"#aboutInfoValue {{ color: {palette.text}; font-size: 15px; padding: 0; }}"
             f"#aboutInfoValue a {{ color: {palette.primary}; text-decoration: none; }}"
+            f"#aboutHeaderActions {{ background: transparent; }}"
+            f"#aboutHeaderUpdateButton {{ background: {palette.primary}; color: #FFFFFF; border: 1px solid {palette.primary}; border-radius: 8px; min-height: 28px; padding: 0 10px; font-size: 13px; font-weight: 600; }}"
+            f"#aboutHeaderUpdateButton:hover {{ background: {palette.primary_hover}; border-color: {palette.primary_hover}; }}"
+            f"#aboutHeaderChangelogButton {{ background: transparent; color: {palette.primary}; border: none; min-height: 24px; padding: 0 6px; font-size: 13px; font-weight: 600; }}"
+            f"#aboutHeaderChangelogButton:hover {{ background: {link_hover}; border-radius: 7px; }}"
+            f"#updateStatusLabel {{ color: {palette.text_secondary}; font-size: 12px; min-height: 18px; padding: 0; }}"
             f"#aboutLinkButton {{ background: transparent; color: {palette.primary}; border: 1px solid {soft_border}; border-radius: 9px; min-height: 32px; padding: 0 12px; text-align: left; font-size: 14px; font-weight: 600; }}"
             f"#aboutLinkButton:hover {{ background: {link_hover}; }}"
             f"#aboutCloseButton {{ background: {palette.primary}; color: #FFFFFF; border: 1px solid {palette.primary}; border-radius: 9px; min-width: 76px; min-height: 32px; padding: 0 16px; font-size: 14px; font-weight: 600; }}"
             f"#aboutCloseButton:hover {{ background: {palette.primary_hover}; border-color: {palette.primary_hover}; }}"
         )
+
+        viewport = self.findChild(QWidget, "aboutViewport")
+        if viewport is not None:
+            viewport.setStyleSheet(
+                f"QWidget#aboutViewport {{ background: {palette.background}; }}"
+            )
+        card = self.findChild(QFrame, "aboutCard")
+        if card is not None:
+            card.setStyleSheet(
+                f"QFrame#aboutCard {{ background: {palette.surface}; border: 1px solid {palette.border}; border-radius: 16px; }}"
+            )
+        for section in self.findChildren(QFrame, "aboutSection"):
+            section.setStyleSheet(
+                f"QFrame#aboutSection {{ background: {muted_surface}; border: 1px solid {palette.border}; border-radius: 12px; }}"
+            )
 
     def _load_avatar(self, url: str):
         if os.path.exists(url):

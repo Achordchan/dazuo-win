@@ -12,14 +12,11 @@ from PyQt5.QtWidgets import QApplication
 from .dialog_utils import build_menu_stylesheet, get_dialog_palette, install_chinese_context_menu, show_themed_message, to_rgba
 from .font_settings import DEFAULT_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE, MIN_TEXT_FONT_SIZE, clamp_text_font_size
 from .themes import ThemeManager
-from .gengxinrizhi import GengXinRiZhi
-from . import update_controller as _update_controller
 from ..shezhi import Config
 from ..shezhi.config_defaults import VENDOR_DEFAULTS
 from ..gongju.autostart import configure_autostart, apply_macos_dock_visibility, get_autostart_state
 from ..gongju.achord_engine import AchordEngineUpdater, compare_versions
 from ..gongju.fanyi_api.deepl import infer_deepl_plan, verify_deepl_auth
-from ..version import APP_VERSION
 
 
 class HotkeyEdit(QLineEdit):
@@ -114,6 +111,37 @@ def install_chinese_line_edit_menu(line_edit: QLineEdit):
 
 
 class SheZhiChuangKou(QDialog):
+    # (配置值, 下拉框显示名)。顺序即下拉框顺序。
+    SERVICE_OPTIONS = (
+        ("google", "Google（默认）"),
+        ("microsoft", "微软翻译"),
+        ("deepl", "DeepL"),
+        ("achord_builtin", "Achord 内置引擎"),
+        ("openai_compat", "AI（通用接口）"),
+    )
+    SERVICE_NOTES = {
+        "google": "Google 翻译无需 API 密钥，但 Google 服务在中国大陆无法直接访问，需要能访问海外网站的网络（代理/VPN）。",
+        "microsoft": "微软翻译默认使用 Bing 翻译网页接口，无需 API Key，中国大陆可直接访问；如有 Azure 翻译资源可选填 Key 使用官方接口。",
+        "deepl": "DeepL 需要 API Key；程序会自动识别 Free / Pro 并显示身份标识。",
+        "achord_builtin": "Achord 内置引擎会在本机静默启动，无需登录；引擎可单独检测并更新。",
+        "openai_compat": "AI 模式需要填写模型厂家、接口地址、模型名和 API Key。",
+    }
+
+    @classmethod
+    def service_index(cls, api_name: str) -> int:
+        if api_name == "deeplx":
+            api_name = "achord_builtin"
+        for index, (name, _) in enumerate(cls.SERVICE_OPTIONS):
+            if name == api_name:
+                return index
+        return 0
+
+    @classmethod
+    def service_name_at(cls, index: int) -> str:
+        if 0 <= index < len(cls.SERVICE_OPTIONS):
+            return cls.SERVICE_OPTIONS[index][0]
+        return "google"
+
     """设置窗口类"""
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -209,6 +237,7 @@ class SheZhiChuangKou(QDialog):
         self._sync_font_size_preview()
 
         startup_group = QGroupBox("启动")
+        startup_group.setObjectName("startupGroup")
         startup_layout = QVBoxLayout()
         startup_layout.setSpacing(8)
         self.auto_start_checkbox = QCheckBox("开机自启")
@@ -219,37 +248,9 @@ class SheZhiChuangKou(QDialog):
             startup_layout.addWidget(self.show_in_dock_checkbox)
         startup_group.setLayout(startup_layout)
 
-        update_group = QGroupBox("更新")
-        update_layout = QVBoxLayout()
-        update_layout.setSpacing(10)
-
-        version_label = QLabel(f"当前版本：v{APP_VERSION}")
-        self.check_update_button = QPushButton("检测更新")
-        self.check_update_button.setFixedHeight(34)
-        self.check_update_button.clicked.connect(self._on_check_update_clicked)
-
-        self.changelog_button = QPushButton("查看更新说明")
-        self.changelog_button.setFixedHeight(34)
-        self.changelog_button.clicked.connect(self._on_show_changelog)
-
-        update_button_row = QHBoxLayout()
-        update_button_row.setSpacing(12)
-        update_button_row.addWidget(self.check_update_button)
-        update_button_row.addWidget(self.changelog_button)
-        self.update_status_label = QLabel("")
-        self.update_status_label.setObjectName("updateStatusLabel")
-        self.update_status_label.setVisible(False)
-        update_button_row.addWidget(self.update_status_label)
-        update_button_row.addStretch()
-
-        update_layout.addWidget(version_label)
-        update_layout.addLayout(update_button_row)
-        update_group.setLayout(update_layout)
-
+        base_layout.addWidget(startup_group)
         base_layout.addWidget(shortcut_group)
         base_layout.addWidget(display_group)
-        base_layout.addWidget(startup_group)
-        base_layout.addWidget(update_group)
         base_layout.addStretch()
 
         base_scroll = QScrollArea()
@@ -273,7 +274,7 @@ class SheZhiChuangKou(QDialog):
         service_container.setSpacing(4)
         service_label = QLabel("当前使用:")
         self.translation_api_combo = QComboBox()
-        self.translation_api_combo.addItems(["Google（默认）", "DeepL", "Achord 内置引擎", "AI（通用接口）"])
+        self.translation_api_combo.addItems([label for _, label in self.SERVICE_OPTIONS])
         service_help = QLabel("在这里选择翻译引擎")
         service_help.setProperty("help", "true")
         service_container.addWidget(service_label)
@@ -366,6 +367,28 @@ class SheZhiChuangKou(QDialog):
         self.deepl_settings_group.setLayout(deepl_layout)
         service_layout.addWidget(self.deepl_settings_group)
 
+        self.microsoft_settings_group = QGroupBox("微软翻译设置（可选）")
+        microsoft_layout = QVBoxLayout()
+        microsoft_layout.setSpacing(14)
+        microsoft_layout.setContentsMargins(20, 20, 20, 20)
+        microsoft_help = QLabel("留空即使用免费的 Bing 翻译网页接口。若填写 Azure 翻译资源的 Key，则改用官方接口。")
+        microsoft_help.setProperty("help", "true")
+        microsoft_help.setWordWrap(True)
+        microsoft_key_label = QLabel("Azure API Key（可选）:")
+        self.microsoft_api_key_input = QLineEdit()
+        self.microsoft_api_key_input.setEchoMode(QLineEdit.Password)
+        self.microsoft_api_key_input.setPlaceholderText("留空使用免费接口")
+        microsoft_region_label = QLabel("Azure 区域（可选）:")
+        self.microsoft_region_input = QLineEdit()
+        self.microsoft_region_input.setPlaceholderText("例如 eastasia、global；全局资源可留空")
+        microsoft_layout.addWidget(microsoft_help)
+        microsoft_layout.addWidget(microsoft_key_label)
+        microsoft_layout.addWidget(self.microsoft_api_key_input)
+        microsoft_layout.addWidget(microsoft_region_label)
+        microsoft_layout.addWidget(self.microsoft_region_input)
+        self.microsoft_settings_group.setLayout(microsoft_layout)
+        service_layout.addWidget(self.microsoft_settings_group)
+
         self.achord_engine_updater = AchordEngineUpdater()
         self._last_achord_release_approved = False
         self._achord_engine_update_active = False
@@ -397,7 +420,7 @@ class SheZhiChuangKou(QDialog):
         self.achord_engine_group.setLayout(achord_layout)
         service_layout.addWidget(self.achord_engine_group)
 
-        self.translation_note_label = QLabel("注意：Google 翻译无需 API 密钥，但需要确保网络能访问 Google 服务")
+        self.translation_note_label = QLabel(self.SERVICE_NOTES["google"])
         self.translation_note_label.setProperty("help", "true")
         self.translation_note_label.setWordWrap(True)
         service_layout.addWidget(self.translation_note_label)
@@ -445,8 +468,6 @@ class SheZhiChuangKou(QDialog):
         row.setSpacing(12)
 
         label = QLabel(label_text)
-        label.setFixedWidth(72)
-
         slider = QSlider(Qt.Horizontal)
         slider.setObjectName(f"{role}FontSizeSlider")
         slider.setRange(MIN_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE)
@@ -459,7 +480,6 @@ class SheZhiChuangKou(QDialog):
         value_label = QLabel(f"{DEFAULT_TEXT_FONT_SIZE} px")
         value_label.setObjectName("fontSizeValuePill")
         value_label.setAlignment(Qt.AlignCenter)
-        value_label.setFixedWidth(58)
 
         setattr(self, f"{role}_font_size_slider", slider)
         setattr(self, f"{role}_font_size_value_label", value_label)
@@ -525,17 +545,7 @@ class SheZhiChuangKou(QDialog):
     def _load_form_from_config(self):
         """加载当前设置。"""
         api_name = self.parent.config.get("translation.api", "google")
-        if api_name == "google":
-            api_index = 0
-        elif api_name == "deepl":
-            api_index = 1
-        elif api_name in {"achord_builtin", "deeplx"}:
-            api_index = 2
-        elif api_name == "openai_compat":
-            api_index = 3
-        else:
-            api_index = 0
-        self.translation_api_combo.setCurrentIndex(api_index)
+        self.translation_api_combo.setCurrentIndex(self.service_index(api_name))
 
         hotkey = self.parent.config.get("shortcuts.copy_translate", "ctrl+c,c")
         if hasattr(self, "copy_hotkey_input"):
@@ -560,6 +570,9 @@ class SheZhiChuangKou(QDialog):
         if hasattr(self, "deepl_api_key_input"):
             self.deepl_api_key_input.setText(self.parent.config.get("deepl.api_key", ""))
             self._update_deepl_badge(self.parent.config.get("deepl.account_type", ""))
+        if hasattr(self, "microsoft_api_key_input"):
+            self.microsoft_api_key_input.setText(self.parent.config.get("microsoft.api_key", ""))
+            self.microsoft_region_input.setText(self.parent.config.get("microsoft.region", ""))
         self._refresh_achord_engine_status()
         self._sync_ai_settings_visibility()
 
@@ -661,10 +674,12 @@ class SheZhiChuangKou(QDialog):
                 pending_show_in_dock = self.show_in_dock_checkbox.isChecked()
                 updates["show_in_dock"] = pending_show_in_dock
 
-            api_names = ["google", "deepl", "achord_builtin", "openai_compat"]
-            api_index = self.translation_api_combo.currentIndex()
-            api_name = api_names[api_index] if 0 <= api_index < len(api_names) else "google"
+            api_name = self.service_name_at(self.translation_api_combo.currentIndex())
             updates["translation.api"] = api_name
+
+            if hasattr(self, "microsoft_api_key_input"):
+                updates["microsoft.api_key"] = self.microsoft_api_key_input.text().strip()
+                updates["microsoft.region"] = self.microsoft_region_input.text().strip()
 
             if hasattr(self, "deepl_api_key_input"):
                 updates["deepl.api_key"] = self.deepl_api_key_input.text().strip()
@@ -787,14 +802,6 @@ class SheZhiChuangKou(QDialog):
                 text=f"保存设置时出错：{e}",
                 buttons=QMessageBox.Ok,
             )
-
-    def _on_check_update_clicked(self):
-        _update_controller.check_update_with_message(self)
-
-    def _on_show_changelog(self):
-        dialog = GengXinRiZhi(self)
-        dialog.setModal(True)
-        dialog.exec_()
 
     def _refresh_achord_engine_status(self, extra: str = ""):
         if not hasattr(self, "achord_engine_status"):
@@ -1103,21 +1110,13 @@ class SheZhiChuangKou(QDialog):
         return
 
     def _sync_ai_settings_visibility(self):
-        index = self.translation_api_combo.currentIndex()
-        is_deepl = index == 1
-        is_achord_engine = index == 2
-        is_ai = index == 3
+        api_name = self.service_name_at(self.translation_api_combo.currentIndex())
         if hasattr(self, "deepl_settings_group"):
-            self.deepl_settings_group.setVisible(is_deepl)
+            self.deepl_settings_group.setVisible(api_name == "deepl")
+        if hasattr(self, "microsoft_settings_group"):
+            self.microsoft_settings_group.setVisible(api_name == "microsoft")
         if hasattr(self, "achord_engine_group"):
-            self.achord_engine_group.setVisible(is_achord_engine)
-        self.ai_settings_group.setVisible(is_ai)
+            self.achord_engine_group.setVisible(api_name == "achord_builtin")
+        self.ai_settings_group.setVisible(api_name == "openai_compat")
 
-        if index == 0:
-            self.translation_note_label.setText("Google 翻译无需 API 密钥，但需要确保网络可以访问 Google 服务。")
-        elif index == 1:
-            self.translation_note_label.setText("DeepL 需要 API Key；程序会自动识别 Free / Pro 并显示身份标识。")
-        elif index == 2:
-            self.translation_note_label.setText("Achord 内置引擎会在本机静默启动，无需登录；引擎可单独检测并更新。")
-        else:
-            self.translation_note_label.setText("AI 模式需要填写模型厂家、接口地址、模型名和 API Key。")
+        self.translation_note_label.setText(self.SERVICE_NOTES.get(api_name, self.SERVICE_NOTES["google"]))

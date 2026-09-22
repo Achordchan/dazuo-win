@@ -1,3 +1,4 @@
+import base64
 import os
 import sys
 import json
@@ -7,10 +8,18 @@ import logging
 import re
 import subprocess
 import shutil
+import tempfile
 import time
 import zipfile
+from dataclasses import dataclass
 from PyQt5.QtCore import QObject, pyqtSignal
 from src.version import APP_VERSION
+from src.gongju.update_delta import (
+    DELTA_PACKAGE_TYPE,
+    inspect_delta_package,
+    is_reparse_point,
+    reconstruct_delta_package,
+)
 from src.gongju.update_trust import (
     extract_signature_from_release_notes,
     infer_package_identity,
@@ -52,11 +61,74 @@ def should_defer_start_for_pending_update(
         return False
 
 
+class UpdateSourceError(RuntimeError):
+    """所有更新源都不可用时抛出。"""
+
+
+@dataclass(frozen=True)
+class UpdateSource:
+    """一个 Release 更新源（GitHub / Gitee 的 releases/latest 接口）。"""
+
+    name: str
+    api_url: str
+    repo_url: str
+    headers: tuple = ()
+
+    def request_headers(self) -> dict:
+        return dict(self.headers)
+
+
+GITHUB_REPO_URL = "https://github.com/Achordchan/dazuo-win"
+GITEE_REPO_URL = "https://gitee.com/Achordchan/dazuofanyiguan"
+
+# 1.2.11 起以 GitHub 为主仓库与主更新源；Gitee 长期保留为备用镜像源：
+# 旧版本客户端只认 Gitee，且 GitHub 在部分网络下不可达，因此每个版本都需双端发布。
+# 顺序即尝试顺序。
+DEFAULT_UPDATE_SOURCES = (
+    UpdateSource(
+        name="GitHub",
+        api_url="https://api.github.com/repos/Achordchan/dazuo-win/releases/latest",
+        repo_url=GITHUB_REPO_URL,
+        headers=(
+            ("Accept", "application/vnd.github+json"),
+            ("X-GitHub-Api-Version", "2022-11-28"),
+            ("User-Agent", f"DaZuoFanYiGuan/{APP_VERSION}"),
+        ),
+    ),
+    UpdateSource(
+        name="Gitee",
+        api_url="https://gitee.com/api/v5/repos/Achordchan/dazuofanyiguan/releases/latest",
+        repo_url=GITEE_REPO_URL,
+        headers=(("User-Agent", f"DaZuoFanYiGuan/{APP_VERSION}"),),
+    ),
+)
+
+# 单个更新源的检查超时。GitHub 在部分网络下可能被阻断，需要尽快切换到下一个源。
+UPDATE_SOURCE_TIMEOUT_SECONDS = 15
+
+
+@dataclass(frozen=True)
+class UpdateAsset:
+    name: str
+    url: str
+    size_bytes: int
+    package_type: str
+    signature: str
+    sha256: str = ""
+    base_version: str = ""
+
+    @property
+    def suffix(self) -> str:
+        return os.path.splitext(self.name)[1] or ".zip"
+
+
 class Updater(QObject):
     MAX_UPDATE_PACKAGE_BYTES = 400 * 1024 * 1024
     MAX_ZIP_MEMBERS = 20000
     MAX_ZIP_UNCOMPRESSED_BYTES = 800 * 1024 * 1024
     MAX_ZIP_COMPRESSION_RATIO = 100.0
+    MAX_SIGNATURE_METADATA_BYTES = 64 * 1024
+    MAX_UPDATE_BACKUPS = 2
     # 定义信号
     update_available = pyqtSignal(str, str, bool)  # 版本号, 更新说明, 是否强制更新
     update_progress = pyqtSignal(int)  # 下载进度
@@ -66,7 +138,11 @@ class Updater(QObject):
     def __init__(self):
         super().__init__()
         self.current_version = APP_VERSION  # 当前版本号
-        self.gitee_api = "https://gitee.com/api/v5/repos/Achordchan/dazuofanyiguan/releases/latest"
+        self.update_sources: tuple[UpdateSource, ...] = DEFAULT_UPDATE_SOURCES
+        self.active_update_source: UpdateSource | None = None
+        # 兼容旧调用方/测试：分别暴露 GitHub 与 Gitee 接口地址。
+        self.github_api = DEFAULT_UPDATE_SOURCES[0].api_url
+        self.gitee_api = DEFAULT_UPDATE_SOURCES[1].api_url
         self.update_url = None
         self.release_notes = None
         self.force_update = False
@@ -77,6 +153,11 @@ class Updater(QObject):
         self.expected_asset_name = None
         self.expected_package_sha256 = None
         self.expected_package_size = None
+        self.selected_package_type = "windows_full_update"
+        self.selected_base_version = ""
+        self._selected_asset = None
+        self._fallback_full_asset = None
+        self._prepared_update_source = None
         self._download_in_progress = False
         cache_root = os.environ.get("DZFYQ_HOME") or os.path.expanduser("~/.dzfyq")
         self._download_dir = os.path.join(cache_root, "update_cache")
@@ -116,6 +197,30 @@ class Updater(QObject):
             except OSError as error:
                 logger.warning(f"清理旧更新包失败: {file_path}, {error}")
 
+    def _prune_update_backups(self) -> None:
+        if not os.path.isdir(self._backup_root):
+            return
+        backups = []
+        try:
+            with os.scandir(self._backup_root) as entries:
+                for entry in entries:
+                    if is_reparse_point(entry.path):
+                        logger.warning("跳过重解析点更新备份: %s", entry.path)
+                        continue
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    backups.append((entry.stat(follow_symlinks=False).st_mtime, entry.path))
+        except OSError as error:
+            logger.warning("枚举更新备份失败: %s", error)
+            return
+        backups.sort(key=lambda item: item[0], reverse=True)
+        for _modified_at, path in backups[self.MAX_UPDATE_BACKUPS:]:
+            try:
+                shutil.rmtree(path)
+                logger.info("已清理旧更新备份: %s", path)
+            except OSError as error:
+                logger.warning("清理旧更新备份失败: %s, %s", path, error)
+
     def _build_download_path(self, suffix: str) -> str:
         self._ensure_download_dir()
         normalized_suffix = suffix if suffix.startswith(".") else f".{suffix}"
@@ -140,6 +245,179 @@ class Updater(QObject):
             normalized,
         ) is not None
 
+
+    def _expected_windows_delta_update_asset_name(
+        self,
+        base_version: str,
+        target_version: str,
+    ) -> str:
+        base = normalize_version(base_version)
+        target = normalize_version(target_version)
+        if not base or not target:
+            return ""
+        return f"dazuofanyiguan_delta.for.windows_{base}_to_{target}.zip"
+
+    @staticmethod
+    def _describe_source_status(source: UpdateSource, status: int) -> str:
+        if status == 404:
+            return (
+                f"{source.name} 返回 404。可能是仓库地址错误、仓库被删除、"
+                "被设为私有或尚未发布任何 Release。"
+            )
+        if status == 403:
+            return f"{source.name} 返回 403。可能是访问被拒绝、触发频率限制或需要鉴权。"
+        if status == 429:
+            return f"{source.name} 返回 429。请求过于频繁，请稍后再试。"
+        return f"{source.name} 返回 HTTP {status}。"
+
+    async def _fetch_latest_release(self, session) -> dict:
+        """按顺序尝试各更新源，返回第一个可用的 Release 数据。"""
+        errors = []
+        self.active_update_source = None
+        for source in self.update_sources:
+            try:
+                logger.info("正在请求 %s Release API: %s", source.name, source.api_url)
+                async with session.get(
+                    source.api_url,
+                    headers=source.request_headers(),
+                    timeout=aiohttp.ClientTimeout(total=UPDATE_SOURCE_TIMEOUT_SECONDS),
+                ) as response:
+                    if response.status != 200:
+                        raise UpdateSourceError(
+                            self._describe_source_status(source, response.status)
+                        )
+                    data = await response.json(content_type=None)
+                if not isinstance(data, dict) or not (
+                    data.get("tag_name") or data.get("name")
+                ):
+                    raise UpdateSourceError(f"{source.name} 返回的 Release 数据无效。")
+                self.active_update_source = source
+                logger.info("使用更新源: %s", source.name)
+                return data
+            except UpdateSourceError as error:
+                errors.append(str(error))
+                logger.warning("更新源 %s 不可用: %s", source.name, error)
+            except asyncio.TimeoutError:
+                errors.append(f"{source.name} 请求超时。")
+                logger.warning("更新源 %s 请求超时", source.name)
+            except Exception as error:  # 网络错误、JSON 解析错误等，继续尝试下一个源
+                errors.append(f"{source.name} 请求失败：{error}")
+                logger.warning("更新源 %s 请求失败: %s", source.name, error)
+        raise UpdateSourceError(" ".join(errors) or "没有可用的更新源。")
+
+    @staticmethod
+    def _release_assets_by_name(assets) -> dict[str, dict]:
+        result = {}
+        for asset in assets or []:
+            if not isinstance(asset, dict):
+                continue
+            name = str(asset.get("name") or "").strip()
+            if name:
+                result[name.lower()] = asset
+        return result
+
+    async def _read_signature_metadata(
+        self,
+        session,
+        assets_by_name: dict[str, dict],
+        package_asset: dict,
+        *,
+        expected_package_type: str,
+        expected_target_version: str,
+    ) -> dict | None:
+        package_name = str(package_asset.get("name") or "").strip()
+        signature_asset = assets_by_name.get(f"{package_name}.sig.json".lower())
+        if not signature_asset:
+            return None
+        signature_url = str(signature_asset.get("browser_download_url") or "").strip()
+        if not signature_url:
+            raise RuntimeError(f"签名元数据缺少下载地址：{package_name}")
+        async with session.get(signature_url) as response:
+            if response.status != 200:
+                raise RuntimeError(
+                    f"下载签名元数据失败：HTTP {response.status}，文件 {package_name}"
+                )
+            content_length = int(response.headers.get("content-length", 0) or 0)
+            if content_length > self.MAX_SIGNATURE_METADATA_BYTES:
+                raise RuntimeError(f"签名元数据体积异常：{package_name}")
+            chunks = []
+            total = 0
+            async for chunk in response.content.iter_chunked(8192):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > self.MAX_SIGNATURE_METADATA_BYTES:
+                    raise RuntimeError(f"签名元数据体积异常：{package_name}")
+                chunks.append(chunk)
+            raw = b"".join(chunks)
+        try:
+            payload = json.loads(raw.decode("utf-8-sig"))
+        except Exception as error:
+            raise RuntimeError(f"签名元数据损坏：{package_name}") from error
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"签名元数据格式无效：{package_name}")
+        if str(payload.get("filename") or "") != package_name:
+            raise RuntimeError(f"签名元数据文件名不匹配：{package_name}")
+        if normalize_version(payload.get("app_version")) != normalize_version(
+            expected_target_version
+        ):
+            raise RuntimeError(f"签名元数据目标版本不匹配：{package_name}")
+        if str(payload.get("package_type") or "") != expected_package_type:
+            raise RuntimeError(f"签名元数据包类型不匹配：{package_name}")
+        if normalize_platform(payload.get("platform")) != "windows":
+            raise RuntimeError(f"签名元数据平台不匹配：{package_name}")
+        signature = str(payload.get("signature") or "").strip()
+        digest = str(payload.get("sha256") or "").strip().lower()
+        try:
+            size_bytes = int(payload.get("size_bytes") or 0)
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(f"签名元数据文件大小无效：{package_name}") from error
+        if not signature or not re.fullmatch(r"[A-Za-z0-9+/=]+", signature):
+            raise RuntimeError(f"签名元数据缺少有效签名：{package_name}")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise RuntimeError(f"签名元数据 SHA256 无效：{package_name}")
+        if size_bytes <= 0:
+            raise RuntimeError(f"签名元数据文件大小无效：{package_name}")
+        release_size = int(package_asset.get("size") or 0)
+        if release_size and release_size != size_bytes:
+            raise RuntimeError(f"签名元数据文件大小与 Release 不一致：{package_name}")
+        return {
+            "signature": signature,
+            "sha256": digest,
+            "size_bytes": size_bytes,
+        }
+
+    @staticmethod
+    def _build_update_asset(
+        package_asset: dict,
+        *,
+        package_type: str,
+        signature: str,
+        signature_metadata: dict | None = None,
+        base_version: str = "",
+    ) -> UpdateAsset:
+        metadata = signature_metadata or {}
+        return UpdateAsset(
+            name=str(package_asset.get("name") or "").strip(),
+            url=str(package_asset.get("browser_download_url") or "").strip(),
+            size_bytes=int(metadata.get("size_bytes") or package_asset.get("size") or 0),
+            package_type=package_type,
+            signature=str(metadata.get("signature") or signature or "").strip(),
+            sha256=str(metadata.get("sha256") or "").strip().lower(),
+            base_version=normalize_version(base_version),
+        )
+
+    def _activate_update_asset(self, asset: UpdateAsset) -> None:
+        self._selected_asset = asset
+        self.update_url = asset.url
+        self.asset_suffix = asset.suffix
+        self.release_signature = asset.signature
+        self.expected_asset_name = asset.name
+        self.expected_package_size = asset.size_bytes or None
+        self.expected_package_sha256 = asset.sha256 or None
+        self.selected_package_type = asset.package_type
+        self.selected_base_version = asset.base_version
+
     def _sanitize_name(self, value: str | None) -> str:
         safe = "".join(char if char.isalnum() or char in "._-" else "_" for char in (value or ""))
         return safe.strip("._-") or str(int(time.time()))
@@ -154,6 +432,64 @@ class Updater(QObject):
 
     def _is_frozen_app(self) -> bool:
         return bool(getattr(sys, "frozen", False) or globals().get("__compiled__"))
+
+    def _is_process_elevated(self) -> bool:
+        if sys.platform != "win32":
+            return False
+        try:
+            import ctypes
+
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
+
+    def _current_process_creation_filetime(self) -> int:
+        """Return the Windows creation FILETIME used to disambiguate PID reuse."""
+        if sys.platform != "win32":
+            return 0
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            get_process_times = kernel32.GetProcessTimes
+            get_process_times.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(wintypes.FILETIME),
+                ctypes.POINTER(wintypes.FILETIME),
+                ctypes.POINTER(wintypes.FILETIME),
+                ctypes.POINTER(wintypes.FILETIME),
+            ]
+            get_process_times.restype = wintypes.BOOL
+
+            creation = wintypes.FILETIME()
+            exit_time = wintypes.FILETIME()
+            kernel_time = wintypes.FILETIME()
+            user_time = wintypes.FILETIME()
+            if not get_process_times(
+                kernel32.GetCurrentProcess(),
+                ctypes.byref(creation),
+                ctypes.byref(exit_time),
+                ctypes.byref(kernel_time),
+                ctypes.byref(user_time),
+            ):
+                raise OSError(ctypes.get_last_error(), "GetProcessTimes failed")
+            return (int(creation.dwHighDateTime) << 32) | int(creation.dwLowDateTime)
+        except Exception as error:
+            raise RuntimeError(
+                "\u65e0\u6cd5\u5b89\u5168\u8bc6\u522b\u5f53\u524d\u8fdb\u7a0b\uff0c\u5df2\u7ec8\u6b62\u9759\u9ed8\u66f4\u65b0\u3002"
+            ) from error
+
+    def _ensure_silent_update_context(self) -> None:
+        if self._is_process_elevated():
+            raise RuntimeError(
+                "管理员身份下已禁用静默更新。请退出程序后以普通用户身份运行，"
+                "再重新检测更新。"
+            )
+
+    def _current_install_dir(self) -> str:
+        return os.path.dirname(os.path.abspath(sys.executable))
 
     def _current_exe_name(self) -> str:
         return os.path.basename(sys.executable) or "大佐翻译官.exe"
@@ -330,6 +666,13 @@ class Updater(QObject):
             platform=platform,
             max_bytes=self.MAX_UPDATE_PACKAGE_BYTES,
         )
+        if package_type == DELTA_PACKAGE_TYPE:
+            inspect_delta_package(
+                file_path,
+                expected_base_version=self.selected_base_version or self.current_version,
+                expected_target_version=self.latest_version or "",
+                verify_payload_hashes=True,
+            )
         self.force_update = bool(self._force_update_requested)
         self.expected_package_sha256 = actual_sha
         self.expected_package_size = size
@@ -350,18 +693,74 @@ class Updater(QObject):
         self._validate_update_manifest(source_dir)
         return source_dir, exe_name
 
-    def _write_apply_script(self, script_path: str) -> None:
-        script = r'''param(
-    [Parameter(Mandatory=$true)][string]$SourceDir,
-    [Parameter(Mandatory=$true)][string]$TargetDir,
-    [Parameter(Mandatory=$true)][string]$ExeName,
-    [Parameter(Mandatory=$true)][int]$ProcessId,
-    [Parameter(Mandatory=$true)][string]$BackupDir,
-    [Parameter(Mandatory=$true)][string]$LogPath,
-    [Parameter(Mandatory=$true)][string]$ResultPath,
-    [Parameter(Mandatory=$true)][string]$PendingPath,
-    [string]$ExpectedVersion = ""
-)
+    def _prepare_delta_update_source(self, file_path: str) -> tuple[str, str]:
+        if not self._is_frozen_app():
+            raise RuntimeError("开发模式不支持增量静默替换，请使用打包版本验证。")
+        self._ensure_silent_update_context()
+        self._ensure_download_dir()
+        version_name = self._sanitize_name(self.latest_version or self.current_version)
+        rebuild_dir = tempfile.mkdtemp(
+            prefix=f"delta_rebuilt_{version_name}_",
+            dir=self._download_dir,
+        )
+        try:
+            manifest = reconstruct_delta_package(
+                file_path,
+                install_dir=self._current_install_dir(),
+                output_dir=rebuild_dir,
+                expected_base_version=self.selected_base_version or self.current_version,
+                expected_target_version=self.latest_version or "",
+                allowed_output_root=self._download_dir,
+            )
+        except Exception:
+            if not is_reparse_point(rebuild_dir):
+                shutil.rmtree(rebuild_dir, ignore_errors=True)
+            raise
+        source_dir, exe_name = self._find_update_source_dir(
+            rebuild_dir,
+            self._current_exe_name(),
+        )
+        self._validate_update_manifest(source_dir)
+        self._prepared_update_source = (
+            os.path.abspath(file_path),
+            source_dir,
+            exe_name,
+        )
+        logger.info(
+            "增量更新目录重建完成: v%s -> v%s, %s",
+            manifest.base_version,
+            manifest.app_version,
+            source_dir,
+        )
+        return source_dir, exe_name
+
+    def _clear_prepared_update_source(self) -> None:
+        prepared = self._prepared_update_source
+        self._prepared_update_source = None
+        if not prepared:
+            return
+        source_dir = os.path.abspath(prepared[1])
+        download_root = os.path.abspath(self._download_dir)
+        try:
+            if (
+                os.path.commonpath([download_root, source_dir]) == download_root
+                and not is_reparse_point(source_dir)
+            ):
+                shutil.rmtree(source_dir, ignore_errors=True)
+        except ValueError:
+            return
+
+    def _build_apply_script(self) -> str:
+        return r'''$SourceDir = [string]$env:DZFYQ_UPDATE_SOURCE_DIR
+$TargetDir = [string]$env:DZFYQ_UPDATE_TARGET_DIR
+$ExeName = [string]$env:DZFYQ_UPDATE_EXE_NAME
+$ProcessId = [int]$env:DZFYQ_UPDATE_PROCESS_ID
+$ProcessCreationFileTime = [Int64]$env:DZFYQ_UPDATE_PROCESS_CREATED_FILETIME
+$BackupDir = [string]$env:DZFYQ_UPDATE_BACKUP_DIR
+$LogPath = [string]$env:DZFYQ_UPDATE_LOG_PATH
+$ResultPath = [string]$env:DZFYQ_UPDATE_RESULT_PATH
+$PendingPath = [string]$env:DZFYQ_UPDATE_PENDING_PATH
+$ExpectedVersion = [string]$env:DZFYQ_UPDATE_EXPECTED_VERSION
 
 $ErrorActionPreference = "Stop"
 $backupCompleted = $false
@@ -396,6 +795,26 @@ function Write-UpdateResult {
     $payload | ConvertTo-Json -Compress | Set-Content -LiteralPath $ResultPath -Encoding UTF8
 }
 
+function Get-OriginalProcess {
+    $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if ($null -eq $process) {
+        return $null
+    }
+    if ($ProcessCreationFileTime -le 0) {
+        return $process
+    }
+    try {
+        $actualCreationFileTime = [Int64]$process.StartTime.ToUniversalTime().ToFileTimeUtc()
+    }
+    catch {
+        throw "Cannot verify process $ProcessId identity: $($_.Exception.Message)"
+    }
+    if ($actualCreationFileTime -ne $ProcessCreationFileTime) {
+        return $null
+    }
+    return $process
+}
+
 function Invoke-RobocopyChecked {
     param(
         [string]$From,
@@ -406,7 +825,7 @@ function Invoke-RobocopyChecked {
 
     $copyMode = if ($Mirror) { "/MIR" } else { "/E" }
     Write-UpdateLog "$Phase from [$From] to [$To] with $copyMode"
-    & robocopy $From $To $copyMode /R:3 /W:1 /NFL /NDL /NJH /NJS /NP
+    & robocopy $From $To $copyMode /IS /R:3 /W:1 /NFL /NDL /NJH /NJS /NP
     $code = $LASTEXITCODE
     Write-UpdateLog "$Phase robocopy exit code: $code"
     if ($code -gt 7) {
@@ -481,7 +900,7 @@ function Assert-ExpectedVersion {
 function Start-TargetAppIfStopped {
     param([string]$Reason)
 
-    if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+    if ($null -ne (Get-OriginalProcess)) {
         Write-UpdateLog "Skip restart because old process is still running."
         return
     }
@@ -512,16 +931,21 @@ try {
     Assert-ExpectedVersion -Directory $SourceDir -Phase "source"
 
     $deadline = (Get-Date).AddSeconds(60)
-    while (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+    $originalProcess = Get-OriginalProcess
+    if ($null -eq $originalProcess -and $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+        Write-UpdateLog "Process ID $ProcessId has been reused; the unrelated process will not be stopped."
+    }
+    while ($null -ne $originalProcess) {
         if ((Get-Date) -gt $deadline) {
             Write-UpdateLog "Timed out waiting for process $ProcessId to exit; forcing termination."
-            Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+            Stop-Process -InputObject $originalProcess -Force -ErrorAction Stop
             Start-Sleep -Milliseconds 800
             break
         }
         Start-Sleep -Milliseconds 500
+        $originalProcess = Get-OriginalProcess
     }
-    if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+    if ($null -ne (Get-OriginalProcess)) {
         throw "Process $ProcessId is still running after forced termination."
     }
     Stop-TargetEngineProcesses
@@ -542,9 +966,9 @@ try {
     }
     Assert-ExpectedVersion -Directory $TargetDir -Phase "target"
 
+    Write-UpdateResult -Status "success" -Message "Update completed."
     Start-Process -FilePath $targetExe -WorkingDirectory $TargetDir -ArgumentList "--update-restart"
     Write-UpdateLog "Update completed and app restarted."
-    Write-UpdateResult -Status "success" -Message "Update completed."
     Remove-Item -LiteralPath $PendingPath -Force -ErrorAction SilentlyContinue
     exit 0
 }
@@ -564,7 +988,7 @@ catch {
         else {
             Write-UpdateLog "Backup did not complete; target directory was left unchanged."
             $targetExeAfter = Join-Path $TargetDir $ExeName
-            if ((Test-Path -LiteralPath $targetExeAfter -PathType Leaf) -and (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) -eq $null) {
+            if ((Test-Path -LiteralPath $targetExeAfter -PathType Leaf) -and (Get-OriginalProcess) -eq $null) {
                 # Target never modified; safe to restart original.
                 $restoreSucceeded = $true
             }
@@ -585,13 +1009,17 @@ catch {
     exit 1
 }
 '''
+
+    def _write_apply_script(self, script_path: str) -> None:
         with open(script_path, "w", encoding="utf-8-sig", newline="\r\n") as script_file:
-            script_file.write(script)
+            script_file.write(self._build_apply_script())
 
     def _write_pending_update_state(self, log_path: str) -> None:
         state = {
             "expected_version": self.latest_version or "",
             "current_version": self.current_version,
+            "package_type": self.selected_package_type,
+            "base_version": self.selected_base_version,
             "log_path": log_path,
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         }
@@ -604,53 +1032,62 @@ catch {
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"更新包不存在: {file_path}")
 
-        target_dir = os.path.dirname(os.path.abspath(sys.executable))
+        self._ensure_silent_update_context()
+        target_dir = self._current_install_dir()
         self._ensure_target_writable(target_dir)
 
-        source_dir, exe_name = self._prepare_full_update_source(file_path)
+        if self.selected_package_type == DELTA_PACKAGE_TYPE:
+            prepared = self._prepared_update_source
+            if prepared and os.path.abspath(prepared[0]) == os.path.abspath(file_path):
+                source_dir, exe_name = prepared[1], prepared[2]
+            else:
+                source_dir, exe_name = self._prepare_delta_update_source(file_path)
+        else:
+            source_dir, exe_name = self._prepare_full_update_source(file_path)
         self._ensure_safe_replace_paths(source_dir, target_dir)
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         version_name = self._sanitize_name(self.latest_version or self.current_version)
         os.makedirs(self._backup_root, exist_ok=True)
 
         backup_dir = os.path.join(self._backup_root, f"{version_name}_{timestamp}")
-        script_path = os.path.join(self._download_dir, f"apply_update_{version_name}_{timestamp}.ps1")
         os.makedirs(self._state_dir, exist_ok=True)
         log_path = os.path.join(self._state_dir, f"apply_update_{version_name}_{timestamp}.log")
-        self._write_apply_script(script_path)
+        result_path = self._last_update_result_path()
+        pending_path = self._pending_update_path()
+        process_creation_filetime = self._current_process_creation_filetime()
         self._write_pending_update_state(log_path)
 
         env = os.environ.copy()
         env.pop("__COMPAT_LAYER", None)
         env.pop("COMPAT_LAYER", None)
+        env.update(
+            {
+                "DZFYQ_UPDATE_SOURCE_DIR": source_dir,
+                "DZFYQ_UPDATE_TARGET_DIR": target_dir,
+                "DZFYQ_UPDATE_EXE_NAME": exe_name,
+                "DZFYQ_UPDATE_PROCESS_ID": str(os.getpid()),
+                "DZFYQ_UPDATE_PROCESS_CREATED_FILETIME": str(process_creation_filetime),
+                "DZFYQ_UPDATE_BACKUP_DIR": backup_dir,
+                "DZFYQ_UPDATE_LOG_PATH": log_path,
+                "DZFYQ_UPDATE_RESULT_PATH": result_path,
+                "DZFYQ_UPDATE_PENDING_PATH": pending_path,
+                "DZFYQ_UPDATE_EXPECTED_VERSION": str(self.latest_version or ""),
+            }
+        )
 
+        encoded_script = base64.b64encode(
+            self._build_apply_script().encode("utf-16-le")
+        ).decode("ascii")
         command = [
             "powershell.exe",
             "-NoProfile",
+            "-NonInteractive",
             "-ExecutionPolicy",
             "Bypass",
             "-WindowStyle",
             "Hidden",
-            "-File",
-            script_path,
-            "-SourceDir",
-            source_dir,
-            "-TargetDir",
-            target_dir,
-            "-ExeName",
-            exe_name,
-            "-ProcessId",
-            str(os.getpid()),
-            "-BackupDir",
-            backup_dir,
-            "-LogPath",
-            log_path,
-            "-ResultPath",
-            self._last_update_result_path(),
-            "-PendingPath",
-            self._pending_update_path(),
-            "-ExpectedVersion",
-            str(self.latest_version or ""),
+            "-EncodedCommand",
+            encoded_script,
         ]
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
@@ -672,6 +1109,7 @@ catch {
         os._exit(0)
 
     def discard_downloaded_update(self, file_path: str) -> None:
+        self._clear_prepared_update_source()
         if not file_path:
             return
         try:
@@ -696,182 +1134,294 @@ catch {
             self.expected_asset_name = None
             self.expected_package_sha256 = None
             self.expected_package_size = None
+            self.selected_package_type = "windows_full_update"
+            self.selected_base_version = ""
+            self._selected_asset = None
+            self._fallback_full_asset = None
+            self._clear_prepared_update_source()
             logger.info("开始检查更新...")
             async with aiohttp.ClientSession() as session:
-                logger.info(f"正在请求 Gitee API: {self.gitee_api}")
-                async with session.get(self.gitee_api) as response:
-                    if response.status == 404:
-                        logger.error("仓库不存在或无法访问")
-                        self.update_error.emit(
-                            "检查更新失败：Gitee 返回 404。可能是仓库地址错误、仓库被删除或被设为私有。"
+                try:
+                    data = await self._fetch_latest_release(session)
+                except UpdateSourceError as error:
+                    self.update_error.emit(f"检查更新失败：{error}")
+                    return False
+
+                tag_name = data.get("tag_name") or data.get("name") or ""
+                latest_version = normalize_version(tag_name)
+                logger.info(
+                    "获取到最新版本: %s, 当前版本: %s",
+                    latest_version,
+                    self.current_version,
+                )
+                if self._compare_versions(latest_version, self.current_version) <= 0:
+                    logger.info("当前已是最新版本")
+                    return False
+
+                self.latest_version = latest_version
+                self.release_notes = data.get("body") or "暂无更新说明"
+                marker = "update=1"
+                wants_force_update = marker in self.release_notes
+                current_platform = self._current_update_platform()
+                release_note_signature = extract_signature_from_release_notes(
+                    self.release_notes,
+                    platform=current_platform,
+                )
+                clean_notes = strip_signature_markers_from_notes(
+                    self.release_notes.replace(marker, "").strip()
+                )
+                assets = data.get("assets") or []
+
+                if sys.platform == "darwin":
+                    package_asset = next(
+                        (
+                            asset
+                            for asset in assets
+                            if str(asset.get("name") or "").lower().endswith(".dmg")
+                        ),
+                        None,
+                    )
+                    if not package_asset or not release_note_signature:
+                        raise RuntimeError(
+                            "Release 缺少 macOS DMG 或 DZFYQ-SIG-MACOS 签名"
                         )
-                        return False
-                    if response.status == 403:
-                        logger.error("访问被拒绝或频率限制")
-                        self.update_error.emit(
-                            "检查更新失败：Gitee 返回 403。可能是访问被拒绝、触发频率限制或需要鉴权。"
-                        )
-                        return False
-                    if response.status != 200:
-                        logger.error(f"Gitee API 请求失败: HTTP {response.status}")
-                        self.update_error.emit(
-                            f"检查更新失败：Gitee 返回 HTTP {response.status}。"
-                        )
-                        return False
-                    
-                    data = await response.json()
-                    tag_name = data.get('tag_name') or data.get('name') or ""
-                    latest_version = tag_name.lstrip('v')
-                    logger.info(f"获取到最新版本: {latest_version}, 当前版本: {self.current_version}")
-                    
-                    # 比较版本号
-                    if self._compare_versions(latest_version, self.current_version) > 0:
-                        logger.info(f"发现新版本: {latest_version}")
-                        self.latest_version = latest_version
-                        
-                        # 获取更新信息
-                        self.release_notes = data.get('body') or "暂无更新说明"
-                        logger.info(f"更新说明: {self.release_notes}")
-                        
-                        # Parse force-update marker and signature first, but only
-                        # activate force_update after platform signature + asset exist.
-                        marker = "update=1"
-                        wants_force_update = marker in self.release_notes
-                        current_platform = self._current_update_platform()
-                        self.release_signature = extract_signature_from_release_notes(
-                            self.release_notes,
-                            platform=current_platform,
-                        )
-                        if not self.release_signature:
-                            raise RuntimeError(
-                                f"Release 说明缺少 {current_platform} 平台签名标记 "
-                                f"(DZFYQ-SIG-{current_platform.upper()}:...)"
+                    selected = self._build_update_asset(
+                        package_asset,
+                        package_type="macos_dmg_update",
+                        signature=release_note_signature,
+                    )
+                    self._activate_update_asset(selected)
+                elif sys.platform == "win32":
+                    assets_by_name = self._release_assets_by_name(assets)
+                    full_asset_raw = next(
+                        (
+                            asset
+                            for asset in assets
+                            if self._is_windows_full_update_asset(
+                                str(asset.get("name") or ""),
+                                latest_version,
                             )
-                        # 移除强制更新标记与签名标记，避免展示在更新说明中
-                        clean_notes = self.release_notes.replace(marker, "").strip()
-                        clean_notes = strip_signature_markers_from_notes(clean_notes)
+                        ),
+                        None,
+                    )
+                    if not full_asset_raw:
+                        raise RuntimeError(
+                            "未找到 Windows 全量更新包，请上传 "
+                            "dazuofanyiguan_full.for.windows_<version>.zip"
+                        )
 
-                        # 获取下载链接
-                        platform_suffixes = []
-                        if sys.platform == "darwin":
-                            platform_suffixes = [".dmg"]
-                        elif sys.platform == "win32":
-                            platform_suffixes = [".zip"]
-                        else:
-                            self.update_error.emit("暂不支持该平台自动更新。")
-                            return False
+                    full_metadata = None
+                    try:
+                        full_metadata = await self._read_signature_metadata(
+                            session,
+                            assets_by_name,
+                            full_asset_raw,
+                            expected_package_type="windows_full_update",
+                            expected_target_version=latest_version,
+                        )
+                    except Exception as error:
+                        if not release_note_signature:
+                            raise
+                        logger.warning("忽略无效的全量包签名元数据: %s", error)
+                    if (
+                        full_metadata
+                        and release_note_signature
+                        and full_metadata["signature"] != release_note_signature
+                    ):
+                        raise RuntimeError("Release 全量包签名标记与签名文件不一致")
+                    full_signature = (
+                        (full_metadata or {}).get("signature")
+                        or release_note_signature
+                    )
+                    if not full_signature:
+                        raise RuntimeError(
+                            "Release 缺少 Windows 全量包签名标记或签名文件"
+                        )
+                    full_asset = self._build_update_asset(
+                        full_asset_raw,
+                        package_type="windows_full_update",
+                        signature=full_signature,
+                        signature_metadata=full_metadata,
+                    )
+                    if not full_asset.url:
+                        raise RuntimeError("Windows 全量更新包缺少下载地址")
 
-                        for asset in data.get('assets', []):
-                            asset_name = (asset.get('name') or "").lower()
-                            logger.info(f"检查资源: {asset_name}")
-                            if sys.platform == "win32":
-                                asset_matched = self._is_windows_full_update_asset(asset_name, latest_version)
+                    selected = full_asset
+                    delta_name = self._expected_windows_delta_update_asset_name(
+                        self.current_version,
+                        latest_version,
+                    )
+                    delta_asset_raw = assets_by_name.get(delta_name.lower())
+                    if delta_asset_raw:
+                        try:
+                            delta_metadata = await self._read_signature_metadata(
+                                session,
+                                assets_by_name,
+                                delta_asset_raw,
+                                expected_package_type=DELTA_PACKAGE_TYPE,
+                                expected_target_version=latest_version,
+                            )
+                            if delta_metadata is None:
+                                raise RuntimeError("增量包缺少签名文件")
+                            delta_asset = self._build_update_asset(
+                                delta_asset_raw,
+                                package_type=DELTA_PACKAGE_TYPE,
+                                signature=delta_metadata["signature"],
+                                signature_metadata=delta_metadata,
+                                base_version=self.current_version,
+                            )
+                            full_size = int(full_asset.size_bytes or 0)
+                            delta_size = int(delta_asset.size_bytes or 0)
+                            if (
+                                full_size > 0
+                                and delta_size > 0
+                                and delta_size * 100 <= full_size * 80
+                            ):
+                                selected = delta_asset
+                                self._fallback_full_asset = full_asset
+                                logger.info(
+                                    "选择文件级增量更新: %s (%s bytes)，"
+                                    "全量包 %s bytes",
+                                    delta_asset.name,
+                                    delta_size,
+                                    full_size,
+                                )
                             else:
-                                asset_matched = any(asset_name.endswith(suffix) for suffix in platform_suffixes)
-                            if asset_matched:
-                                self.update_url = asset.get('browser_download_url')
-                                self.asset_suffix = os.path.splitext(asset_name)[1]
-                                self.expected_asset_name = asset.get('name') or asset_name
-                                self.expected_package_size = asset.get('size')
-                                if self.update_url:
-                                    logger.info(f"找到更新包下载链接: {self.update_url}")
-                                    break
+                                logger.info(
+                                    "增量包未达到至少节省 20% 的阈值，使用全量包"
+                                )
+                        except Exception as error:
+                            logger.warning("增量包不可用，使用全量包: %s", error)
+                    self._activate_update_asset(selected)
+                else:
+                    self.update_error.emit("暂不支持该平台自动更新。")
+                    return False
 
-                        if self.update_url:
-                            # Metadata may request force update, but enforcement only
-                            # becomes active after the downloaded package is authenticated.
-                            self._force_update_requested = wants_force_update
-                            self.force_update = False
-                            logger.info(f"是否请求强制更新: {wants_force_update}")
-                            logger.info("发送更新可用信号")
-                            self.update_available.emit(latest_version, clean_notes, self.force_update)
-                            return True
-                        # Incomplete release must not trigger force-exit.
-                        self.force_update = False
-                        suffix_text = "/".join(platform_suffixes)
-                        if sys.platform == "win32":
-                            self.update_error.emit(
-                                "未找到 Windows 全量更新包，请在 Gitee Release 中上传 "
-                                "dazuofanyiguan_full.for.windows_<version>.zip"
-                            )
-                        else:
-                            self.update_error.emit(f"未找到安装包资源，请在 Gitee Release 中上传 {suffix_text} 文件")
-                        return False
-                    else:
-                        logger.info("当前已是最新版本")
-            
+                self._force_update_requested = wants_force_update
+                self.force_update = False
+                logger.info(
+                    "更新资源已选择: type=%s name=%s force_requested=%s",
+                    self.selected_package_type,
+                    self.expected_asset_name,
+                    wants_force_update,
+                )
+                self.update_available.emit(latest_version, clean_notes, self.force_update)
+                return True
+        except aiohttp.ClientError as error:
+            logger.error("网络请求错误: %s", error)
+            self.update_error.emit(
+                f"网络请求错误：{error}。请检查网络/代理/证书设置。"
+            )
             return False
-        except aiohttp.ClientError as e:
-            logger.error(f"网络请求错误: {e}")
-            self.update_error.emit(f"网络请求错误：{str(e)}。请检查网络/代理/证书设置。")
+        except Exception as error:
+            logger.error("检查更新出错: %s", error)
+            self.update_error.emit(f"检查更新失败: {error}")
             return False
-        except Exception as e:
-            logger.error(f"检查更新出错: {e}")
-            self.update_error.emit(f"检查更新失败: {str(e)}")
-            return False
+
+    async def _download_asset_to_path(
+        self,
+        session,
+        asset: UpdateAsset,
+        temp_path: str,
+    ) -> None:
+        async with session.get(asset.url) as response:
+            if response.status == 404:
+                raise RuntimeError("更新包资源不存在（HTTP 404）")
+            if response.status == 403:
+                raise RuntimeError("更新包下载被拒绝或触发频率限制（HTTP 403）")
+            if response.status != 200:
+                raise RuntimeError(f"更新包下载失败：HTTP {response.status}")
+            total_size = int(response.headers.get("content-length", 0) or 0)
+            if total_size and total_size > self.MAX_UPDATE_PACKAGE_BYTES:
+                raise RuntimeError("更新包体积过大，已终止更新。")
+            if asset.size_bytes and total_size and asset.size_bytes != total_size:
+                raise RuntimeError("更新包大小与发布信息不一致，已终止更新。")
+            with open(temp_path, "wb") as file:
+                downloaded = 0
+                async for chunk in response.content.iter_chunked(8192):
+                    if not chunk:
+                        continue
+                    downloaded += len(chunk)
+                    if downloaded > self.MAX_UPDATE_PACKAGE_BYTES:
+                        raise RuntimeError("更新包体积过大，已终止更新。")
+                    file.write(chunk)
+                    if total_size:
+                        self.update_progress.emit(int(downloaded / total_size * 100))
 
     async def download_update(self):
-        """下载更新文件"""
+        """下载并验证更新；增量失败时在退出前自动改用全量包。"""
         if self._download_in_progress:
             logger.info("更新包下载已在进行，忽略重复下载请求。")
             return
-        if not self.update_url:
+        selected = self._selected_asset
+        if selected is None and self.update_url:
+            selected = UpdateAsset(
+                name=self.expected_asset_name or os.path.basename(self.update_url),
+                url=self.update_url,
+                size_bytes=int(self.expected_package_size or 0),
+                package_type=self.selected_package_type,
+                signature=self.release_signature or "",
+                sha256=self.expected_package_sha256 or "",
+                base_version=self.selected_base_version,
+            )
+        if selected is None or not selected.url:
             self.update_error.emit("没有可用的更新")
             return
 
+        attempts = [selected]
+        if (
+            selected.package_type == DELTA_PACKAGE_TYPE
+            and self._fallback_full_asset is not None
+        ):
+            attempts.append(self._fallback_full_asset)
+
         self._download_in_progress = True
         temp_path = ""
+        last_error = None
         try:
-            suffix = self.asset_suffix or (".dmg" if sys.platform == "darwin" else ".zip")
-            temp_path = self._build_download_path(suffix)
-            self._cleanup_download_cache(keep_file=temp_path)
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-
             async with aiohttp.ClientSession() as session:
-                async with session.get(self.update_url) as response:
-                    if response.status == 404:
-                        self.update_error.emit("下载失败：更新包资源不存在（HTTP 404）。")
+                for index, asset in enumerate(attempts):
+                    self._activate_update_asset(asset)
+                    temp_path = self._build_download_path(asset.suffix)
+                    self._cleanup_download_cache(keep_file=temp_path)
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                    try:
+                        await self._download_asset_to_path(session, asset, temp_path)
+                        logger.info("更新文件下载完成: %s", temp_path)
+                        self._verify_downloaded_package(temp_path)
+                        if asset.package_type == DELTA_PACKAGE_TYPE:
+                            self._prepare_delta_update_source(temp_path)
+                        last_error = None
+                        self.update_complete.emit(temp_path)
                         return
-                    if response.status == 403:
-                        self.update_error.emit("下载失败：下载被拒绝或频率限制（HTTP 403）。")
-                        return
-                    if response.status != 200:
-                        self.update_error.emit(f"下载失败：HTTP {response.status}。")
-                        return
-
-                    # 获取文件大小
-                    total_size = int(response.headers.get('content-length', 0) or 0)
-                    if total_size and total_size > self.MAX_UPDATE_PACKAGE_BYTES:
-                        raise RuntimeError("更新包体积过大，已终止更新。")
-                    if self.expected_package_size and total_size and int(self.expected_package_size) != total_size:
-                        raise RuntimeError("更新包大小与发布信息不一致，已终止更新。")
-
-                    with open(temp_path, 'wb') as f:
-                        downloaded = 0
-                        async for chunk in response.content.iter_chunked(8192):
-                            if not chunk:
-                                continue
-                            downloaded += len(chunk)
-                            if downloaded > self.MAX_UPDATE_PACKAGE_BYTES:
-                                raise RuntimeError("更新包体积过大，已终止更新。")
-                            f.write(chunk)
-                            if total_size:
-                                progress = int((downloaded / total_size) * 100)
-                                self.update_progress.emit(progress)
-
-            logger.info(f"更新文件下载完成: {temp_path}")
-            self._verify_downloaded_package(temp_path)
-            self.update_complete.emit(temp_path)
-            
-        except Exception as e:
-            logger.error(f"下载更新出错: {e}")
-            self.update_error.emit(f"下载更新失败：{str(e)}")
-            if temp_path and os.path.exists(temp_path):
-                os.unlink(temp_path)
+                    except Exception as error:
+                        last_error = error
+                        logger.warning(
+                            "更新资源处理失败: type=%s name=%s error=%s",
+                            asset.package_type,
+                            asset.name,
+                            error,
+                        )
+                        self._clear_prepared_update_source()
+                        if temp_path and os.path.exists(temp_path):
+                            os.unlink(temp_path)
+                        if index + 1 < len(attempts):
+                            logger.warning("增量更新失败，自动改用已签名全量包")
+                            self.update_progress.emit(0)
+                            continue
+                        raise
+        except Exception as error:
+            last_error = error
+            logger.error("下载更新出错: %s", error)
+            self.update_error.emit(f"下载更新失败：{error}")
         finally:
             self._download_in_progress = False
-
+            if last_error and temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
 
     def install_update(self, file_path):
         """安装更新"""

@@ -113,7 +113,13 @@ def infer_package_identity(filename: str, *, package_type: str = "", platform: s
             explicit_platform = "windows"
 
     if not explicit_type:
-        if explicit_platform == "macos" or name.endswith(".dmg"):
+        if re.fullmatch(
+            r"dazuofanyiguan_delta\.for\.windows_"
+            r"\d+(?:\.\d+){1,3}_to_\d+(?:\.\d+){1,3}\.zip",
+            name,
+        ):
+            explicit_type = "windows_file_delta"
+        elif explicit_platform == "macos" or name.endswith(".dmg"):
             explicit_type = "macos_dmg_update"
         else:
             explicit_type = "windows_full_update"

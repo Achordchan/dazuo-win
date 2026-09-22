@@ -74,8 +74,14 @@ echo Verifying Windows full update package structure and embedded public-key sig
 python tools\verify_windows_package.py output\dazuofanyiguan_full.for.windows_%VERSION%.zip %VERSION%
 if errorlevel 1 exit /b 1
 
+if defined DZFYQ_DELTA_BASE_ZIP (
+  echo Creating, signing, and verifying Windows delta update package...
+  python tools\build_windows_delta.py "%DZFYQ_DELTA_BASE_ZIP%" output\dazuofanyiguan_full.for.windows_%VERSION%.zip --private-key "%DZFYQ_UPDATE_PRIVATE_KEY%"
+  if errorlevel 1 exit /b 1
+)
+
 echo Build complete.
 echo - Full update package: output\dazuofanyiguan_full.for.windows_%VERSION%.zip
 echo - Signature marker file: output\dazuofanyiguan_full.for.windows_%VERSION%.zip.sig.json
-echo - Put DZFYQ-SIG from the signature file into Gitee Release notes
+echo - Put DZFYQ-SIG from the signature file into the GitHub Release notes and the Gitee mirror Release notes (every version is published to both)
 echo - Setup package: compile setup.iss with Inno Setup Compiler

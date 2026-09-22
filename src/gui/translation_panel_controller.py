@@ -1,6 +1,7 @@
 import logging
 
 from ..viewmodels.translator_viewmodel import TranslationContext
+from .translator_controller import status_label_for_error
 
 logger = logging.getLogger(__name__)
 
@@ -85,17 +86,25 @@ class TranslationPanelController:
 
         self.main_window.output_text.stop_loading()
         if self._active_error_message:
-            self.main_window.status_indicator.set_status("error", self._active_error_message)
+            self._show_error_status(self._active_error_message)
         else:
             self.main_window.status_indicator.set_status("normal")
         self.main_window.ai_status_bar.stop()
+
+    def _show_error_status(self, message: str) -> None:
+        """状态栏显示简短原因，完整错误放在悬停提示中，避免挤压工具栏。"""
+        label = status_label_for_error(None, message, prefix="翻译失败")
+        try:
+            self.main_window.status_indicator.set_status("error", label, detail=message)
+        except TypeError:
+            self.main_window.status_indicator.set_status("error", label)
 
     def on_error_message_changed(self, message) -> None:
         if message:
             self._active_error_message = str(message)
             self.main_window.output_text.stop_loading()
             self.main_window.switch_button.setEnabled(False)
-            self.main_window.status_indicator.set_status("error", self._active_error_message)
+            self._show_error_status(self._active_error_message)
             return
 
         self._active_error_message = None

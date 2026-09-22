@@ -1,4 +1,4 @@
-"""Sign a Windows full update zip with the release Ed25519 private key."""
+"""Sign a release package with the Ed25519 update private key."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def main() -> int:
     )
     parser.add_argument("--out", type=Path, default=None, help="write signature json")
     parser.add_argument("--platform", default="", help="windows or macos; inferred from filename when omitted")
-    parser.add_argument("--package-type", default="", help="windows_full_update or macos_dmg_update; inferred when omitted")
+    parser.add_argument("--package-type", default="", help="windows_full_update, windows_file_delta, or macos_dmg_update; inferred when omitted")
     args = parser.parse_args()
 
     package = args.package_zip.resolve()
@@ -83,24 +83,29 @@ def main() -> int:
     message = build_canonical_payload(payload)
     signature = load_private_key(key_path).sign(message)
     signature_b64 = base64.b64encode(signature).decode("ascii")
-    platform_marker = {
-        "windows": "DZFYQ-SIG-WINDOWS",
-        "macos": "DZFYQ-SIG-MACOS",
-    }.get(platform, f"DZFYQ-SIG-{platform.upper()}" if platform else "DZFYQ-SIG")
-    # Keep legacy DZFYQ-SIG for Windows so older clients keep working.
-    markers = [f"{platform_marker}:{signature_b64}"]
-    if platform == "windows":
-        markers.append(f"DZFYQ-SIG:{signature_b64}")
+    markers = []
+    if package_type != "windows_file_delta":
+        platform_marker = {
+            "windows": "DZFYQ-SIG-WINDOWS",
+            "macos": "DZFYQ-SIG-MACOS",
+        }.get(platform, f"DZFYQ-SIG-{platform.upper()}" if platform else "DZFYQ-SIG")
+        # Keep legacy DZFYQ-SIG only for Windows full packages.
+        markers = [f"{platform_marker}:{signature_b64}"]
+        if platform == "windows":
+            markers.append(f"DZFYQ-SIG:{signature_b64}")
     result = {
         **payload,
         "signature": signature_b64,
-        "release_notes_marker": markers[0],
-        "release_notes_markers": markers,
     }
+    if markers:
+        result["release_notes_marker"] = markers[0]
+        result["release_notes_markers"] = markers
     out = args.out or package.with_suffix(package.suffix + ".sig.json")
     out.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    for marker in result.get("release_notes_markers") or [result["release_notes_marker"]]:
+    for marker in result.get("release_notes_markers") or []:
         print(marker)
+    if package_type == "windows_file_delta":
+        print("delta signature stored in adjacent .sig.json; no Release marker generated")
     print(f"wrote {out}")
     return 0
 

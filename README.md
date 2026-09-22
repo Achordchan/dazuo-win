@@ -4,13 +4,16 @@
 
 一个优雅、高效的跨平台翻译工具，提供多种翻译服务支持和灵活的使用模式。
 
+> 主仓库：<https://github.com/Achordchan/dazuo-win>（代码、Issue、PR 均在 GitHub）。
+> Gitee 仓库 `Achordchan/dazuofanyiguan` 长期保留为 Release 镜像：每个版本都需要双端发布，客户端在 GitHub 不可达时会自动改用 Gitee 更新。发布步骤见 [PACKAGING_AND_UPDATE.md](PACKAGING_AND_UPDATE.md) 第 3.1 节。
+
 ## 项目介绍
 
 大佐翻译官是一款基于 Python 和 PyQt5 开发的桌面翻译应用程序，支持 Windows、macOS 和 Linux 操作系统。项目采用模块化设计，提供标准窗口和迷你窗口两种使用模式，集成多种翻译引擎，并通过全局快捷键实现便捷的翻译体验。
 
 ### 核心特性
 
-- **多翻译引擎**：支持 Google 翻译以及多种 AI 翻译服务（智谱、OpenAI、DeepSeek、通义千问、字节豆包、Google Gemini）
+- **多翻译引擎**：支持 Google 翻译、微软翻译、DeepL、Achord 内置引擎以及多种 AI 翻译服务（智谱、OpenAI、DeepSeek、通义千问、字节豆包、Google Gemini）
 - **双模式界面**：标准窗口模式提供完整功能，迷你窗口模式支持轻量级浮动翻译
 - **全局快捷键**：支持自定义快捷键，一键呼出翻译窗口
 - **多主题支持**：深色、浅色、粉色三种主题可选
@@ -42,12 +45,14 @@ pip install -r requirements.txt
 ### 运行程序
 
 ```bash
-# 在项目根目录运行（推荐）
-python -m src.main
+# 在项目根目录一键前台运行（Git Bash、Linux 或 macOS）
+./start.sh
 
 # 开发调试模式（显示控制台便于查看日志）
-python -m src.main --debug
+./start.sh --debug
 ```
+
+脚本优先使用项目的 `.venv311`，缺少依赖时会给出安装命令，不会自动安装。程序以前台单进程方式运行，不需要关闭脚本；请在当前终端按 `Ctrl+C`，或在应用托盘中选择“退出”。如需直接运行，仍可使用 `python -m src.main`。
 
 ## 功能说明
 
@@ -57,8 +62,10 @@ python -m src.main --debug
 
 | 引擎 | 配置要求 | 说明 |
 |------|----------|------|
-| Google | 无需配置 | 需要网络能访问 Google 服务 |
+| Google | 无需配置 | Google 服务在中国大陆无法直接访问，需要能访问海外网站的网络（代理/VPN）；主接口被限流时自动切换备用接口 |
+| 微软翻译 | 无需配置 | 默认使用 Bing 翻译网页接口，中国大陆可直接访问；可选填 Azure 翻译 Key / 区域使用官方接口 |
 | DeepL | API Key | 支持 DeepL Free / Pro API |
+| Achord 内置引擎 | 无需配置 | 本机静默启动的内置引擎（基于 DeepLX） |
 | 智谱 AI | API Key | Base URL: https://open.bigmodel.cn/api/paas/v4 |
 | OpenAI | API Key | Base URL: https://api.openai.com/v1 |
 | DeepSeek | API Key | Base URL: https://api.deepseek.com |
@@ -143,6 +150,7 @@ dazuofanyiguan/
 │   │   ├── fanyi.py         # 翻译接口抽象
 │   │   ├── fanyi_api/       # 翻译引擎实现
 │   │   │   ├── google.py    # Google 翻译
+│   │   │   ├── microsoft.py # 微软翻译（Bing 网页 / Azure）
 │   │   │   ├── deepl.py     # DeepL 翻译
 │   │   │   ├── openai_compat.py  # OpenAI 兼容接口
 │   │   ├── kuaijiejian.py   # 快捷键监听
@@ -178,7 +186,7 @@ dazuofanyiguan/
 
 - `FanYiJieKou`：翻译接口抽象基类，定义了翻译接口规范
 - `DaZaoFanYi`：翻译管理器，负责协调各翻译服务
-- 各翻译引擎实现类：GoogleAPI、DeepLAPI、OpenAICompatibleAPI
+- 各翻译引擎实现类：GoogleAPI、MicrosoftAPI、DeepLAPI、AchordBuiltinAPI、OpenAICompatibleAPI
 
 #### 快捷键（src/gongju/kuaijiejian）
 
@@ -243,7 +251,7 @@ pyinstaller --clean --noconfirm build.spec
 ## 常见问题
 
 1. **全局快捷键不工作**
-   - 请确保以管理员权限运行程序
+   - 不要以管理员身份运行；请检查安全软件是否拦截全局快捷键
    - 检查快捷键是否与其他程序冲突
 
 2. **翻译请求失败**

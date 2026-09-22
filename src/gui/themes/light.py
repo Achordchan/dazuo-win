@@ -443,6 +443,7 @@ QDialog#settingsDialog QTabWidget#settingsTabs QTabBar::tab {
     border: 1px solid #E0E0E0;
     border-bottom: none;
     padding: 8px 18px;
+    min-width: 72px;
     min-height: 24px;
     border-top-left-radius: 6px;
     border-top-right-radius: 6px;

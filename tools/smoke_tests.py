@@ -38,10 +38,10 @@ class temporary_profile:
 def check_versions():
     from src.version import APP_VERSION
 
-    assert APP_VERSION == "1.2.10", APP_VERSION
+    assert APP_VERSION == "1.2.11", APP_VERSION
     for relative in ("setup.py", "version.generated.iss", "file_version_info.txt", "src/ziyuan/changelog.md"):
         text = (REPO_ROOT / relative).read_text(encoding="utf-8")
-        assert "1.2.10" in text, relative
+        assert "1.2.11" in text, relative
 
 
 def check_first_run_template():
@@ -698,7 +698,7 @@ def check_achord_payload_materialization():
 
 def check_settings_ui():
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
-    from PyQt5.QtWidgets import QApplication, QLabel, QSlider, QWidget
+    from PyQt5.QtWidgets import QApplication, QGroupBox, QLabel, QPushButton, QScrollArea, QSlider, QWidget
     from src.gui import shezhi_chuangkou
     from src.gui.shezhi_chuangkou import SheZhiChuangKou
     from src.shezhi.config import Config
@@ -728,12 +728,33 @@ def check_settings_ui():
         shezhi_chuangkou.configure_autostart = lambda enabled: None
         try:
             dialog = SheZhiChuangKou(parent)
-            dialog.translation_api_combo.setCurrentIndex(2)
+            base_scroll = dialog.findChild(QScrollArea, "baseSettingsScroll")
+            assert base_scroll is not None
+            base_layout = base_scroll.widget().layout()
+            startup_group = base_layout.itemAt(0).widget()
+            assert isinstance(startup_group, QGroupBox)
+            assert startup_group.objectName() == "startupGroup"
+            assert startup_group.title() == "启动"
+            assert not hasattr(dialog, "check_update_button")
+            assert not hasattr(dialog, "changelog_button")
+            assert not hasattr(dialog, "update_status_label")
+            assert "更新" not in [group.title() for group in base_scroll.widget().findChildren(QGroupBox)]
+            settings_button_texts = [button.text() for button in base_scroll.widget().findChildren(QPushButton)]
+            assert "检测更新" not in settings_button_texts
+            assert "查看更新说明" not in settings_button_texts
+            dialog.translation_api_combo.setCurrentIndex(dialog.service_index("achord_builtin"))
             dialog._sync_ai_settings_visibility()
             text = " ".join(widget.text() for widget in dialog.findChildren(QLabel))
             assert not dialog.achord_engine_group.isHidden()
             assert dialog.deepl_settings_group.isHidden()
+            assert dialog.microsoft_settings_group.isHidden()
             assert dialog.ai_settings_group.isHidden()
+            dialog.translation_api_combo.setCurrentIndex(dialog.service_index("microsoft"))
+            dialog._sync_ai_settings_visibility()
+            assert not dialog.microsoft_settings_group.isHidden()
+            assert dialog.achord_engine_group.isHidden()
+            assert dialog.service_name_at(dialog.translation_api_combo.currentIndex()) == "microsoft"
+            assert "微软翻译" in [dialog.translation_api_combo.itemText(i) for i in range(dialog.translation_api_combo.count())]
             assert "DeepLX Key" not in text
             assert "服务地址" not in text
             assert dialog.source_font_size_spinbox is dialog.source_font_size_spin
@@ -870,13 +891,22 @@ def check_mini_window_ui():
 def check_about_dialog_theme_ui():
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     from PyQt5.QtCore import Qt
-    from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+    from PyQt5.QtWidgets import QApplication, QFrame, QLabel, QPushButton, QScrollArea, QWidget
+    from src.gui.dialog_utils import get_palette_by_theme
+    from src.gui.gengxinrizhi import GengXinRiZhi
+    from src.gui.themes import ThemeManager
     from src.gui.title_bar import AboutDialog
 
     class Parent(QWidget):
         def __init__(self, theme: str):
             super().__init__()
             self.config = {"theme": theme}
+            self.update_feedback_owner = None
+
+        def _check_update_with_message(self, feedback_owner=None):
+            self.update_feedback_owner = feedback_owner
+            feedback_owner.update_status_label.setText("当前已是最新版本")
+            feedback_owner.update_status_label.show()
 
     app = QApplication.instance() or QApplication(sys.argv)
     original_load_avatar = AboutDialog._load_avatar
@@ -885,11 +915,59 @@ def check_about_dialog_theme_ui():
         for theme in ("light", "pink", "dark"):
             parent = Parent(theme)
             dialog = AboutDialog(parent)
+            dialog.resize(dialog.minimumWidth(), dialog.height())
+            dialog.show()
+            app.processEvents()
             stylesheet = dialog.styleSheet()
-            assert "#aboutCard" in stylesheet
-            assert "#aboutSection" in stylesheet
             assert "#aboutCloseButton" in stylesheet
+            scroll = dialog.findChild(QScrollArea, "aboutScroll")
+            viewport = dialog.findChild(QWidget, "aboutViewport")
+            card = dialog.findChild(QFrame, "aboutCard")
+            sections = dialog.findChildren(QFrame, "aboutSection")
+            palette = get_palette_by_theme(theme)
+            muted_surface = palette.surface_alt if theme == "dark" else palette.background
+            assert scroll is not None
+            assert viewport is not None
+            assert card is not None
+            assert len(sections) == 3
+            assert palette.background in viewport.styleSheet()
+            assert palette.surface in card.styleSheet()
+            assert all(muted_surface in section.styleSheet() for section in sections)
+            card.hide()
+            app.processEvents()
+            viewport_image = viewport.grab().toImage()
+            viewport_color = viewport_image.pixelColor(viewport.width() // 2, viewport.height() // 2).name()
+            card.show()
+            app.processEvents()
+            card_image = card.grab().toImage()
+            card_color = card_image.pixelColor(card.width() // 2, 8).name()
+            assert viewport_color == palette.background.lower()
+            assert card_color == palette.surface.lower()
             assert dialog.findChild(QLabel, "aboutVersionBadge") is not None
+            header_actions = dialog.findChild(QWidget, "aboutHeaderActions")
+            check_update_button = dialog.findChild(QPushButton, "aboutHeaderUpdateButton")
+            changelog_button = dialog.findChild(QPushButton, "aboutHeaderChangelogButton")
+            update_status = dialog.findChild(QLabel, "updateStatusLabel")
+            assert header_actions is not None
+            assert check_update_button is not None
+            assert changelog_button is not None
+            assert update_status is not None
+            assert check_update_button.text() == "检测更新"
+            assert changelog_button.text() == "更新说明"
+            assert header_actions.width() == 112
+            assert check_update_button.width() >= check_update_button.minimumSizeHint().width()
+            assert changelog_button.width() >= changelog_button.minimumSizeHint().width()
+            check_bottom = check_update_button.mapTo(header_actions, check_update_button.rect().bottomLeft()).y()
+            changelog_top = changelog_button.mapTo(header_actions, changelog_button.rect().topLeft()).y()
+            assert check_bottom < changelog_top
+            assert dialog.findChildren(QPushButton, "aboutUpdateButton") == []
+            assert scroll.verticalScrollBar().maximum() == 0
+            dialog.check_update_button.click()
+            assert parent.update_feedback_owner is dialog
+            assert update_status.text() == "当前已是最新版本"
+            assert update_status.isVisible()
+            app.processEvents()
+            assert scroll.verticalScrollBar().maximum() == 0
             assert len(dialog.findChildren(QPushButton, "aboutLinkButton")) == 2
             assert dialog.findChild(QPushButton, "aboutCloseButton") is not None
             assert dialog.width() <= 640
@@ -897,6 +975,10 @@ def check_about_dialog_theme_ui():
             assert dialog.contextMenuPolicy() == Qt.NoContextMenu
             for child in dialog.findChildren(QWidget):
                 assert child.contextMenuPolicy() == Qt.NoContextMenu
+            changelog = GengXinRiZhi(dialog)
+            display_names = {"light": "浅色主题", "pink": "粉色主题", "dark": "深色主题"}
+            assert changelog.styleSheet() == ThemeManager.get_theme_style(display_names[theme])
+            changelog.close()
             dialog.close()
             parent.close()
     finally:
@@ -905,7 +987,7 @@ def check_about_dialog_theme_ui():
 
 def check_main_window_redesign_ui():
     os.environ['QT_QPA_PLATFORM'] = 'offscreen'
-    from PyQt5.QtWidgets import QApplication, QFrame, QMainWindow, QPushButton
+    from PyQt5.QtWidgets import QApplication, QFrame, QMainWindow, QPushButton, QWidget
     from src.gui.theme_controller import update_button_icons
     from src.gui.themes import ThemeManager
     from src.gui.zhuchuangkou import ZhuChuangKou
@@ -957,9 +1039,41 @@ def check_main_window_redesign_ui():
         assert not hasattr(window.biaotilan, 'theme_btn')
         assert not hasattr(window.biaotilan, 'mini_mode_btn')
         assert not hasattr(window.biaotilan, 'settings_btn')
-        assert window.findChild(QFrame, 'translationToolbar') is not None
+        toolbar = window.findChild(QFrame, 'translationToolbar')
+        toolbar_actions = window.findChild(QWidget, 'toolbarActions')
+        service_container = window.findChild(QFrame, 'serviceStatusPill')
+        toolbar_buttons = window.findChildren(QPushButton, 'toolbarIconButton')
+        assert toolbar is not None
+        assert toolbar_actions is not None
+        assert service_container is not None
         assert len(window.findChildren(QFrame, 'translationPanel')) == 2
-        assert len(window.findChildren(QPushButton, 'toolbarIconButton')) == 3
+        assert len(toolbar_buttons) == 3
+        error_message = '连接失败：需海外网络'
+        error_detail = (
+            'Google 翻译：无法连接到 Google 翻译。Google 翻译在中国大陆无法直接访问，'
+            '请确认已开启可以访问海外网站的网络（代理/VPN），并让本程序走系统代理，'
+            '或改用微软翻译或 Achord 内置引擎。'
+        ) * 2
+        window.service_display.setText('通义千问(Qwen)')
+        window.status_indicator.set_status('error', error_message, detail=error_detail)
+        app.processEvents()
+        assert window.status_indicator.retry_button.isVisible()
+        assert window.status_indicator.retry_button.width() <= 60
+        assert window.status_indicator.status_label.toolTip() == f"{error_message}\n{error_detail}"
+        assert toolbar.layout().minimumSize().width() < window.minimumWidth() - 40
+        expected_actions_width = sum(button.width() for button in toolbar_buttons) + 16
+        assert toolbar_actions.width() >= expected_actions_width
+        service_right = service_container.mapTo(toolbar, service_container.rect().topRight()).x()
+        actions_left = toolbar_actions.mapTo(toolbar, toolbar_actions.rect().topLeft()).x()
+        assert service_right < actions_left
+        for button in toolbar_buttons:
+            top_left = button.mapTo(toolbar, button.rect().topLeft())
+            assert button.width() == 34 and button.height() >= 34, (
+                button.size().width(), button.size().height(),
+                toolbar_actions.width(), toolbar_actions.height(),
+            )
+            assert top_left.x() >= 0
+            assert top_left.x() + button.width() <= toolbar.width()
         assert window.translation_workspace_layout.stretch(0) == 1
         assert window.translation_workspace_layout.stretch(1) == 1
         assert abs(window.source_panel.width() - window.target_panel.width()) <= 1
@@ -982,6 +1096,14 @@ def check_main_window_redesign_ui():
             window.setStyleSheet(style)
             update_button_icons(window, theme_keys[theme_name])
             app.processEvents()
+            service_right = service_container.mapTo(toolbar, service_container.rect().topRight()).x()
+            actions_left = toolbar_actions.mapTo(toolbar, toolbar_actions.rect().topLeft()).x()
+            assert service_right < actions_left
+            for button in toolbar_buttons:
+                top_left = button.mapTo(toolbar, button.rect().topLeft())
+                assert button.width() == 34 and button.height() >= 34
+                assert top_left.x() >= 0
+                assert top_left.x() + button.width() <= toolbar.width()
     finally:
         window._is_quitting = True
         window.close()
@@ -990,6 +1112,14 @@ def check_main_window_redesign_ui():
 def check_1_2_10_regressions():
     result = subprocess.run(
         [sys.executable, str(REPO_ROOT / "tools" / "regression_tests_1_2_10.py")],
+        check=False,
+    )
+    assert result.returncode == 0, result.returncode
+
+
+def check_1_2_11_regressions():
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "tools" / "regression_tests_1_2_11.py")],
         check=False,
     )
     assert result.returncode == 0, result.returncode
@@ -1034,6 +1164,7 @@ def main() -> int:
         check_about_dialog_theme_ui,
         check_main_window_redesign_ui,
         check_1_2_10_regressions,
+        check_1_2_11_regressions,
         lambda: check_package(args.package),
     ]
     for check in checks:

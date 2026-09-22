@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 import inspect
 import os
@@ -614,6 +615,11 @@ def check_pending_update_start_guard():
             updater._write_apply_script(str(script))
             script_text = script.read_text(encoding="utf-8-sig")
             assert script_text.count('--update-restart') == 2
+            assert "$env:DZFYQ_UPDATE_SOURCE_DIR" in script_text
+            assert script_text.startswith("$SourceDir = [string]$env:DZFYQ_UPDATE_SOURCE_DIR")
+            success_result = script_text.index('Write-UpdateResult -Status "success"')
+            success_restart = script_text.rindex('Start-Process -FilePath $targetExe')
+            assert success_result < success_restart
         finally:
             if old_home is None:
                 os.environ.pop("DZFYQ_HOME", None)
@@ -644,7 +650,7 @@ async def check_partial_prepare_always_restores():
     assert len(error_calls) == 1
 
 
-async def check_force_update_request_auto_downloads():
+async def check_force_update_request_requires_confirmation():
     from src.gui.update_controller import UpdateCoordinator
 
     coordinator = object.__new__(UpdateCoordinator)
@@ -661,11 +667,10 @@ async def check_force_update_request_auto_downloads():
     coordinator._ensure_progress_dialog = lambda: progress_events.append(True)
     coordinator._show_update_prompt = lambda *args: prompt_events.append(args)
     coordinator.on_update_available("9.9.9", "notes", False)
-    coordinator.on_update_available("9.9.9", "notes", False)
     await asyncio.sleep(0)
-    assert progress_events == [True]
-    assert prompt_events == []
-    coordinator.updater.download_update.assert_awaited_once()
+    assert progress_events == []
+    assert prompt_events == [("9.9.9", "notes", True)]
+    coordinator.updater.download_update.assert_not_awaited()
 
 
 async def check_update_download_mutex_preserves_metadata():
@@ -709,24 +714,48 @@ def check_popen_failure_clears_pending():
             updater = update_module.Updater()
             updater.latest_version = "1.3.0"
             updater._is_frozen_app = lambda: True
+            updater._is_process_elevated = lambda: False
             updater._ensure_target_writable = lambda _path: None
             updater._prepare_full_update_source = lambda _path: (
                 str(source_dir),
                 "app.exe",
             )
             updater._ensure_safe_replace_paths = lambda *_args: None
-            updater._write_apply_script = lambda path: Path(path).write_text(
-                "placeholder", encoding="utf-8"
-            )
-            update_module.subprocess.Popen = Mock(
-                side_effect=OSError("powershell unavailable")
-            )
+            popen_mock = Mock(side_effect=OSError("powershell unavailable"))
+            update_module.subprocess.Popen = popen_mock
             try:
                 updater._apply_windows_full_update(str(package))
             except OSError:
                 pass
             else:
                 raise AssertionError("Popen failure was not propagated")
+            command = popen_mock.call_args.args[0]
+            launch_env = popen_mock.call_args.kwargs["env"]
+            assert "-EncodedCommand" in command
+            assert "-File" not in command and "-Command" not in command
+            encoded_script = command[command.index("-EncodedCommand") + 1]
+            assert 0 < len(encoded_script) < 30000
+            script_text = base64.b64decode(encoded_script).decode("utf-16-le")
+            assert "DZFYQ_UPDATE_PROCESS_CREATED_FILETIME" in script_text
+            assert "function Get-OriginalProcess" in script_text
+            assert "StartTime.ToUniversalTime().ToFileTimeUtc()" in script_text
+            assert "$copyMode /IS /R:3" in script_text
+            assert int(launch_env["DZFYQ_UPDATE_PROCESS_CREATED_FILETIME"]) > 0
+            assert not Path(updater._pending_update_path()).exists()
+
+            popen_mock.reset_mock()
+
+            def fail_process_identity():
+                raise RuntimeError("identity unavailable")
+
+            updater._current_process_creation_filetime = fail_process_identity
+            try:
+                updater._apply_windows_full_update(str(package))
+            except RuntimeError as error:
+                assert "identity unavailable" in str(error)
+            else:
+                raise AssertionError("process identity failure was not propagated")
+            assert not popen_mock.called
             assert not Path(updater._pending_update_path()).exists()
         finally:
             update_module.subprocess.Popen = original_popen
@@ -843,8 +872,8 @@ async def main():
     print("ok cold_start_restores_failed_service_config")
     check_force_update_after_authentication()
     print("ok force_update_after_authentication")
-    await check_force_update_request_auto_downloads()
-    print("ok force_update_request_auto_downloads")
+    await check_force_update_request_requires_confirmation()
+    print("ok force_update_request_requires_confirmation")
     await check_update_download_mutex_preserves_metadata()
     print("ok update_download_mutex_preserves_metadata")
     check_pending_update_start_guard()

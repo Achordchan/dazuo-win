@@ -2,7 +2,7 @@
 #define MyAppName "大佐翻译官"
 #include "version.generated.iss"
 #define MyAppPublisher "大佐翻译官"
-#define MyAppURL "https://gitee.com/Achordchan/dazuofanyiguan"
+#define MyAppURL "https://github.com/Achordchan/dazuo-win"
 #define MyAppExeName "大佐翻译官.exe"
 
 [Setup]
