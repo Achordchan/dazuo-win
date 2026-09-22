@@ -138,6 +138,61 @@ def check_delta_generation_and_reconstruction() -> None:
             raise AssertionError("modified installed file was accepted")
 
 
+def check_delta_case_only_rename_is_not_recorded_as_removal() -> None:
+    """仅大小写变化的文件名不能同时出现在 removed_files 与 target_files 中。"""
+    from src.gongju.update_delta import inspect_delta_package, reconstruct_delta_package
+    from tools.create_windows_delta_package import create_delta_package, expected_delta_name
+
+    with tempfile.TemporaryDirectory(prefix="dzfyq_delta_case_") as temp:
+        root = Path(temp)
+        base = root / "base.zip"
+        target = root / "target.zip"
+        _write_full_package(
+            base,
+            "1.2.10",
+            {"大佐翻译官.exe": b"app-v1", "Assets/Logo.ico": b"icon", "keep.txt": b"same"},
+        )
+        _write_full_package(
+            target,
+            "1.2.11",
+            {"大佐翻译官.exe": b"app-v2", "Assets/logo.ico": b"icon", "keep.txt": b"same"},
+        )
+        delta = root / expected_delta_name("1.2.10", "1.2.11")
+        create_delta_package(base, target, delta)
+        manifest = inspect_delta_package(
+            delta,
+            expected_base_version="1.2.10",
+            expected_target_version="1.2.11",
+            verify_payload_hashes=True,
+        )
+        assert manifest.removed_files == (), manifest.removed_files
+        payload_paths = {record.path for record in manifest.payload_files}
+        assert "Assets/logo.ico" in payload_paths, payload_paths
+        assert {record.path for record in manifest.target_files} == {
+            "大佐翻译官.exe",
+            "Assets/logo.ico",
+            "keep.txt",
+            "update_manifest.json",
+        }
+
+        install = root / "install"
+        rebuilt = root / "rebuilt"
+        _extract_install_layout(base, install)
+        reconstruct_delta_package(
+            delta,
+            install_dir=install,
+            output_dir=rebuilt,
+            expected_base_version="1.2.10",
+            expected_target_version="1.2.11",
+        )
+        rebuilt_files = {
+            path.relative_to(rebuilt).as_posix(): path.read_bytes()
+            for path in rebuilt.rglob("*")
+            if path.is_file()
+        }
+        assert rebuilt_files == _zip_files(target), sorted(rebuilt_files)
+
+
 def check_delta_manifest_rejects_unsafe_paths() -> None:
     from src.gongju.update_delta import DeltaPackageError, inspect_delta_package
 
@@ -1057,6 +1112,39 @@ def check_google_falls_back_to_secondary_endpoint() -> None:
 
     asyncio.run(scenario_timeout())
 
+    # 主接口 HTTP 200 但返回验证页（非 JSON）时也要切到备用接口
+    class _HtmlResponse(_JsonResponse):
+        async def json(self, content_type=None):
+            raise json.JSONDecodeError("Expecting value", "<html>", 0)
+
+    api5 = GoogleAPI()
+    api5.session = _RoutedSession(
+        [
+            (GoogleAPI.PRIMARY_URL, lambda: _HtmlResponse(payload=None, text="<html>captcha</html>")),
+            (GoogleAPI.FALLBACK_URL, lambda: _JsonResponse(payload=[["你好", "en"]])),
+        ]
+    )
+
+    async def scenario_html():
+        await api5.health_check()
+        assert (await api5.fanyi("hello", "自动检测", "简体中文")) == ("你好", "en")
+
+    asyncio.run(scenario_html())
+
+    api6 = GoogleAPI()
+    api6.session = _RoutedSession(
+        [
+            (GoogleAPI.PRIMARY_URL, lambda: _HtmlResponse(payload=None, text="<html>")),
+            (GoogleAPI.FALLBACK_URL, lambda: _HtmlResponse(payload=None, text="<html>")),
+        ]
+    )
+    try:
+        asyncio.run(api6.health_check())
+    except TranslationServiceError as error:
+        assert error.kind == "server" and "无法识别" in str(error), str(error)
+    else:
+        raise AssertionError("expected server error for invalid JSON")
+
     api4 = GoogleAPI()
     api4.session = _RoutedSession(
         [
@@ -1242,6 +1330,33 @@ def check_microsoft_web_translation_flow() -> None:
     assert "\n\n" in joined, repr(joined)
     assert joined.count("THello") + joined.count("TSecond") == len(seen_chunks), joined
 
+    # 中文按“。”切分后译成英文：源边界没有空格，拼接时必须补空格
+    from src.gongju.fanyi_api.microsoft import join_translated_chunks
+
+    zh_api = MicrosoftAPI()
+    zh_chunks = []
+
+    async def fake_zh_to_en(chunk_text, _source, _target):
+        zh_chunks.append(chunk_text)
+        return f"Sentence {len(zh_chunks)} is here.", "zh-Hans"
+
+    zh_api._translate_web_chunk = fake_zh_to_en
+    microsoft_module.WEB_CHUNK_LIMIT = 12
+    try:
+        zh_joined, _ = asyncio.run(zh_api._translate_text("这是第一句话。这是第二句话。这是第三句话。", "zh-Hans", "en"))
+    finally:
+        microsoft_module.WEB_CHUNK_LIMIT = old_limit
+    assert len(zh_chunks) >= 2, zh_chunks
+    assert ".S" not in zh_joined, zh_joined
+    assert zh_joined == " ".join(f"Sentence {i} is here." for i in range(1, len(zh_chunks) + 1)), zh_joined
+
+    # 中日韩目标语言之间不补空格；源边界空白原样保留
+    assert join_translated_chunks([("", "第一句。", ""), ("", "第二句。", "")]) == "第一句。第二句。"
+    assert join_translated_chunks([("", "Hello.", ""), ("", "World.", "")]) == "Hello. World."
+    assert join_translated_chunks([("", "Hello.", " "), ("", "World.", "")]) == "Hello. World."
+    assert join_translated_chunks([("", "第一段", "\n\n"), ("", "第二段", "")]) == "第一段\n\n第二段"
+    assert join_translated_chunks([("", "Hello", ""), ("", "，世界", "")]) == "Hello，世界"
+
     chunks = split_text_for_translation("句子一。" * 400, WEB_CHUNK_LIMIT)
     assert all(len(chunk) <= WEB_CHUNK_LIMIT for chunk in chunks)
     assert "".join(chunks) == "句子一。" * 400
@@ -1292,6 +1407,8 @@ def main() -> int:
     print("ok delta_generation_and_reconstruction")
     check_delta_manifest_rejects_unsafe_paths()
     print("ok delta_manifest_rejects_unsafe_paths")
+    check_delta_case_only_rename_is_not_recorded_as_removal()
+    print("ok delta_case_only_rename_is_not_recorded_as_removal")
     asyncio.run(check_delta_asset_selection_and_threshold())
     print("ok delta_asset_selection_and_threshold")
     asyncio.run(check_update_source_falls_back_to_gitee())

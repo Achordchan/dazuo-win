@@ -44,6 +44,48 @@ WEB_CHUNK_LIMIT = 1000
 AZURE_CHUNK_LIMIT = 5000
 
 
+def _is_cjk_char(char: str) -> bool:
+    """中日韩文字及其全角标点：这些文字之间不需要空格分隔。"""
+    if not char:
+        return False
+    code = ord(char)
+    return (
+        0x2E80 <= code <= 0x2FFF  # CJK 部首补充 / 康熙部首
+        or 0x3000 <= code <= 0x303F  # CJK 标点（。、「」等）
+        or 0x3040 <= code <= 0x30FF  # 平假名 / 片假名
+        or 0x3100 <= code <= 0x312F  # 注音
+        or 0x3400 <= code <= 0x4DBF  # CJK 扩展 A
+        or 0x4E00 <= code <= 0x9FFF  # CJK 统一表意文字
+        or 0xAC00 <= code <= 0xD7AF  # 谚文
+        or 0xF900 <= code <= 0xFAFF  # CJK 兼容表意文字
+        or 0xFF00 <= code <= 0xFFEF  # 全角 ASCII / 全角标点
+        or 0x20000 <= code <= 0x3134F  # CJK 扩展 B-G
+    )
+
+
+def join_translated_chunks(parts: list[tuple[str, str, str]]) -> str:
+    """把 (前导空白, 译文, 尾随空白) 列表拼回完整译文。
+
+    源文本里的分段边界空白原样还原；若源边界没有空白（例如中文按“。”切分），
+    而两侧译文都是非中日韩文字（如英文），则补一个空格，避免 “sentence.Next” 粘连。
+    """
+    result = ""
+    for leading, translated, trailing in parts:
+        segment = f"{leading}{translated}{trailing}"
+        if not segment:
+            continue
+        if (
+            result
+            and not result[-1].isspace()
+            and not segment[0].isspace()
+            and not _is_cjk_char(result[-1])
+            and not _is_cjk_char(segment[0])
+        ):
+            result += " "
+        result += segment
+    return result
+
+
 def split_text_for_translation(text: str, limit: int) -> list[str]:
     """把长文本拆成不超过 limit 的片段，尽量在换行/句末/空格处切分。"""
     if limit <= 0 or len(text) <= limit:
@@ -345,22 +387,22 @@ class MicrosoftAPI(FanYiJieKou):
     async def _translate_text(self, text: str, source_code: str, target_code: str) -> tuple[str, Optional[str]]:
         limit = AZURE_CHUNK_LIMIT if self.mode == "azure" else WEB_CHUNK_LIMIT
         translate_chunk = self._translate_azure_chunk if self.mode == "azure" else self._translate_web_chunk
-        pieces = []
+        parts: list[tuple[str, str, str]] = []
         detected: Optional[str] = None
         for chunk in split_text_for_translation(text, limit):
             core = chunk.strip()
             if not core:
-                pieces.append(chunk)
+                parts.append(("", chunk, ""))
                 continue
-            # 服务端通常会去掉译文首尾空白，分段边界的空格/换行由这里单独保留并还原，
-            # 否则相邻分段的单词会被粘连、段落分隔会丢失。
+            # 服务端通常会去掉译文首尾空白，分段边界的空格/换行由这里单独保留并还原；
+            # 源边界没有空白而译文需要（如中文→英文）时，由 join_translated_chunks 补空格。
             leading = chunk[: len(chunk) - len(chunk.lstrip())]
             trailing = chunk[len(chunk.rstrip()):]
             translated, chunk_detected = await translate_chunk(core, source_code, target_code)
-            pieces.append(f"{leading}{translated.strip()}{trailing}")
+            parts.append((leading, translated.strip(), trailing))
             if detected is None and chunk_detected:
                 detected = chunk_detected
-        return "".join(pieces).strip(), detected
+        return join_translated_chunks(parts).strip(), detected
 
     async def fanyi(self, text: str, source_lang: str, target_lang: str) -> tuple[str, Optional[str]]:
         if not text:

@@ -138,6 +138,18 @@ class GoogleAPI(FanYiJieKou):
         raise TranslationServiceError(f"{SERVICE_NAME}返回了无法识别的结果。", kind="server")
 
     @staticmethod
+    async def _read_json(response):
+        """HTTP 200 但正文是验证页/非 JSON 时，转换为可触发备用接口的服务错误。"""
+        try:
+            return await response.json(content_type=None)
+        except (ValueError, TypeError, aiohttp.ContentTypeError) as error:
+            raise TranslationServiceError(
+                f"{SERVICE_NAME}返回了无法识别的结果（可能是人机验证页面），请稍后重试。",
+                kind="server",
+                short="返回异常",
+            ) from error
+
+    @staticmethod
     def _status_error(status: int) -> TranslationServiceError:
         return describe_http_status(
             status,
@@ -160,7 +172,7 @@ class GoogleAPI(FanYiJieKou):
         async with session.get(self.PRIMARY_URL, params=params) as response:
             if response.status != 200:
                 raise self._status_error(response.status)
-            data = await response.json(content_type=None)
+            data = await self._read_json(response)
             return self.parse_primary_response(data)
 
     async def _request_fallback(self, session, text: str, source_code: str, target_code: str):
@@ -173,7 +185,7 @@ class GoogleAPI(FanYiJieKou):
         async with session.get(self.FALLBACK_URL, params=params) as response:
             if response.status != 200:
                 raise self._status_error(response.status)
-            data = await response.json(content_type=None)
+            data = await self._read_json(response)
             return self.parse_fallback_response(data, source_code == "auto")
 
     async def _translate_with_fallback(self, text: str, source_code: str, target_code: str):

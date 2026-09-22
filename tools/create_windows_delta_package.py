@@ -121,7 +121,13 @@ def create_delta_package(
             for path, record in target_records.items()
             if base_records.get(path) != record
         )
-        removed_paths = sorted(set(base_records) - set(target_records), key=str.casefold)
+        # Windows 文件系统不区分大小写：仅大小写变化的重命名不能既记为删除又保留在
+        # target_files 中（parse_delta_manifest 会拒绝这种组合），因此按 casefold 比较。
+        target_folded = {path.casefold() for path in target_records}
+        removed_paths = sorted(
+            (path for path in base_records if path.casefold() not in target_folded),
+            key=str.casefold,
+        )
         payload_records = [target_records[path] for path in changed_paths]
         target_file_records = sorted(
             target_records.values(),
