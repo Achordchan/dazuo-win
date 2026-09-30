@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import QApplication
-from .dialog_utils import build_menu_stylesheet, get_dialog_palette, install_chinese_context_menu, show_themed_message, to_rgba
+from .dialog_utils import build_menu_stylesheet, get_dialog_palette, install_chinese_context_menu, open_themed_message, show_themed_message, to_rgba
 from .font_settings import DEFAULT_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE, MIN_TEXT_FONT_SIZE, clamp_text_font_size
 from .themes import ThemeManager
 from ..shezhi import Config
@@ -835,7 +835,7 @@ class SheZhiChuangKou(QDialog):
             self._last_achord_release_approved = False
             self.achord_engine_update_button.setEnabled(False)
             self._refresh_achord_engine_status("已是最新")
-            show_themed_message(
+            open_themed_message(
                 self,
                 icon=QMessageBox.Information,
                 title="引擎已是最新",
@@ -849,7 +849,7 @@ class SheZhiChuangKou(QDialog):
         self.achord_engine_update_button.setEnabled(approved)
         if approved:
             self._refresh_achord_engine_status(f"发现 v{latest.version}")
-            show_themed_message(
+            open_themed_message(
                 self,
                 icon=QMessageBox.Information,
                 title="发现引擎更新",
@@ -861,7 +861,7 @@ class SheZhiChuangKou(QDialog):
         self._refresh_achord_engine_status(
             f"发现 v{latest.version} · 等待客户端适配"
         )
-        show_themed_message(
+        open_themed_message(
             self,
             icon=QMessageBox.Information,
             title="发现引擎新版本",
@@ -892,7 +892,7 @@ class SheZhiChuangKou(QDialog):
                 self._last_achord_release_approved = False
                 self.achord_engine_update_button.setEnabled(False)
                 self._refresh_achord_engine_status("检测失败")
-                show_themed_message(
+                open_themed_message(
                     self,
                     icon=QMessageBox.Warning,
                     title="检测引擎更新失败",
@@ -910,7 +910,7 @@ class SheZhiChuangKou(QDialog):
             return
         if not self._last_achord_release_approved:
             self._refresh_achord_engine_status("等待客户端适配")
-            show_themed_message(
+            open_themed_message(
                 self,
                 icon=QMessageBox.Information,
                 title="暂不可安装",
@@ -932,7 +932,7 @@ class SheZhiChuangKou(QDialog):
                 self._refresh_achord_engine_status("更新完成")
                 if self.parent.config.get("translation.api", "google") == "achord_builtin":
                     self.parent.reload_translation_api()
-                show_themed_message(
+                open_themed_message(
                     self,
                     icon=QMessageBox.Information,
                     title="引擎更新完成",
@@ -941,7 +941,7 @@ class SheZhiChuangKou(QDialog):
                 )
             except Exception as e:
                 self._refresh_achord_engine_status("更新失败")
-                show_themed_message(
+                open_themed_message(
                     self,
                     icon=QMessageBox.Warning,
                     title="引擎更新失败",
@@ -972,7 +972,7 @@ class SheZhiChuangKou(QDialog):
         self._deepl_verify_generation = verify_generation
         verify_key_snapshot = api_key
         if not api_key:
-            show_themed_message(
+            open_themed_message(
                 self,
                 icon=QMessageBox.Warning,
                 title="DeepL API Key 缺失",
@@ -1002,7 +1002,7 @@ class SheZhiChuangKou(QDialog):
                 if current_key != verify_key_snapshot:
                     # User edited the key while verification was in flight.
                     self._update_deepl_badge(infer_deepl_plan(current_key), "已变更")
-                    show_themed_message(
+                    open_themed_message(
                         self,
                         icon=QMessageBox.Information,
                         title="DeepL 验证取消",
@@ -1013,7 +1013,7 @@ class SheZhiChuangKou(QDialog):
                 self.parent.config.set("deepl.api_key", verify_key_snapshot)
                 self.parent.config.set("deepl.account_type", account_type)
                 self._update_deepl_badge(account_type, detail)
-                show_themed_message(
+                open_themed_message(
                     self,
                     icon=QMessageBox.Information,
                     title="DeepL 验证成功",
@@ -1022,7 +1022,7 @@ class SheZhiChuangKou(QDialog):
                 )
             except Exception as e:
                 self._update_deepl_badge("")
-                show_themed_message(
+                open_themed_message(
                     self,
                     icon=QMessageBox.Warning,
                     title="DeepL 验证失败",
