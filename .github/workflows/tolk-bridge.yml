@@ -40,9 +40,11 @@ jobs:
       TOLK_TOKEN: ${{ secrets.TOLK_READ_TOKEN || github.token }}
     steps:
       - name: Check inputs
+        env:
+          KEY: ${{ secrets.DZFYQ_UPDATE_PRIVATE_KEY_PEM }}
         run: |
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "版本号必须是 x.y.z" >&2; exit 1; }
-          [ -n "${{ secrets.DZFYQ_UPDATE_PRIVATE_KEY_PEM }}" ] || { echo "缺少 Secret DZFYQ_UPDATE_PRIVATE_KEY_PEM" >&2; exit 1; }
+          [ -n "$KEY" ] || { echo "缺少 Secret DZFYQ_UPDATE_PRIVATE_KEY_PEM" >&2; exit 1; }
       - name: Fetch Tolk at the release tag
         uses: actions/checkout@v4
         with:
