@@ -2,6 +2,7 @@ name: Tolk bridge (Windows)
 
 # 把 Tolk 的 Windows 构建，按旧客户端认的格式发布成本仓库的 Release，
 # 让还在用大佐翻译官的用户点「检查更新」就升级成 Tolk。
+# 不再镜像到 Gitee：已确认没有只读 Gitee 的旧客户端了。
 # 用本仓库已有的 Secret DZFYQ_UPDATE_PRIVATE_KEY_PEM 重新签名，私钥不出这个仓库，且只交给本仓库自己的 tools/*.py。
 # 先在 Achordchan/tolk 里运行 Release 工作流，得到 v<版本> 的 Release，再运行本工作流。
 
@@ -77,7 +78,16 @@ jobs:
           python tools/verify_update_signature.py "$ZIP" --version "$VERSION" --signature "$SIG"
           # 说明 = Tolk 发布说明去掉它自己的签名/强更行，再追加旧客户端认的签名行。
           {
-            grep -Ev '^(DZFYQ-SIG|update=)' dist/tolk_notes.md || true
+            # 用客户端自己的 strip_signature_markers_from_notes：任何位置、任何大小写的签名标记都去掉，
+            # 再去掉 update= 行，免得旧客户端先读到 Tolk 的签名。
+            python - dist/tolk_notes.md <<'PY'
+          import re, sys
+          from pathlib import Path
+          from src.gongju.update_trust import strip_signature_markers_from_notes
+          text = strip_signature_markers_from_notes(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          text = "\n".join(l.rstrip() for l in text.splitlines() if not re.match(r"(?i)^\s*[-*]?\s*update\s*=", l))
+          print(text.strip())
+          PY
             echo
             jq -r '.release_notes_markers[]' "$ZIP.sig.json"
             if [ "${{ inputs.force_update }}" = "true" ]; then echo "update=1"; fi
