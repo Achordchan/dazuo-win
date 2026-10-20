@@ -2,7 +2,7 @@ name: Tolk bridge (Windows)
 
 # 把 Tolk 的 Windows 构建，按旧客户端认的格式发布成本仓库的 Release，
 # 让还在用大佐翻译官的用户点「检查更新」就升级成 Tolk。
-# 用本仓库已有的 Secret DZFYQ_UPDATE_PRIVATE_KEY_PEM 重新签名，私钥不出这个仓库。
+# 用本仓库已有的 Secret DZFYQ_UPDATE_PRIVATE_KEY_PEM 重新签名，私钥不出这个仓库，且只交给本仓库自己的 tools/*.py。
 # 先在 Achordchan/tolk 里运行 Release 工作流，得到 v<版本> 的 Release，再运行本工作流。
 
 on:
@@ -14,17 +14,6 @@ on:
         type: string
       force_update:
         description: 在说明里加 update=1（强制更新）
-        required: false
-        default: false
-        type: boolean
-      gitee:
-        description: 同时镜像到 Gitee（旧客户端 <= 1.2.10 只读 Gitee，需要 Secret GITEE_TOKEN）
-        required: false
-        default: true
-        type: boolean
-
-      mirror_only:
-        description: 只补做 Gitee 镜像：复用本仓库已发布的这个版本，不重新签名、不重新发布（上次 Gitee 失败时用）
         required: false
         default: false
         type: boolean
@@ -51,26 +40,18 @@ jobs:
       - name: Check inputs
         env:
           KEY: ${{ secrets.DZFYQ_UPDATE_PRIVATE_KEY_PEM }}
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "版本号必须是 x.y.z" >&2; exit 1; }
-          [ "${{ inputs.mirror_only }}" = "true" ] || [ -n "$KEY" ] || { echo "缺少 Secret DZFYQ_UPDATE_PRIVATE_KEY_PEM" >&2; exit 1; }
-          # 发布之前就确认镜像的凭据在，免得 GitHub 发了、Gitee 却没发成。
-          if [ "${{ inputs.gitee }}" = "true" ] || [ "${{ inputs.mirror_only }}" = "true" ]; then
-            [ -n "$GITEE_TOKEN" ] || { echo "缺少 Secret GITEE_TOKEN（或取消勾选 gitee）" >&2; exit 1; }
-          fi
-      - name: Fetch Tolk at the release tag
-        uses: actions/checkout@v4
+          [ -n "$KEY" ] || { echo "缺少 Secret DZFYQ_UPDATE_PRIVATE_KEY_PEM" >&2; exit 1; }
+      # 从这里往下：Tolk 仓库的发布产物只当"数据"下载，不 checkout、不执行它的任何代码。
+      # 旧私钥只交给本仓库（默认分支）里的 tools/*.py 签名和验签。
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          repository: Achordchan/tolk
-          ref: ${{ env.TAG }}
-          token: ${{ env.TOLK_TOKEN }}
-          path: tolk
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.27.1"
-      - name: Download Tolk's Windows files
-        if: ${{ !inputs.mirror_only }}
+          python-version: "3.12"
+      - name: Install signing dependencies
+        run: python -m pip install "cryptography>=41.0.0"
+      - name: Download Tolk's Windows files (data only)
         env:
           GH_TOKEN: ${{ env.TOLK_TOKEN }}
         run: |
@@ -78,22 +59,32 @@ jobs:
           mkdir -p dist
           gh release download "$TAG" --repo Achordchan/tolk --dir dist \
             --pattern "dazuofanyiguan_full.for.windows_${VERSION}.zip" --pattern "Tolk-setup-windows_${VERSION}.exe"
+          gh release view "$TAG" --repo Achordchan/tolk --json body -q .body > dist/tolk_notes.md
           ls -l dist
       - name: Sign with the legacy key and write the notes
-        if: ${{ !inputs.mirror_only }}
         env:
           DZFYQ_UPDATE_PRIVATE_KEY_PEM: ${{ secrets.DZFYQ_UPDATE_PRIVATE_KEY_PEM }}
-        working-directory: tolk
         run: |
           set -euo pipefail
-          # 自检：签名必须能被旧客户端内置的公钥验证，私钥不对会在这里失败。
-          go run ./cmd/tolk-release winsign -legacy -zip "../dist/dazuofanyiguan_full.for.windows_${VERSION}.zip" -version "$VERSION"
-          FORCE=""; [ "${{ inputs.force_update }}" = "true" ] && FORCE="-force"
-          go run ./cmd/tolk-release notes -version "$VERSION" -changelog CHANGELOG.md \
-            -sig-json "../dist/dazuofanyiguan_full.for.windows_${VERSION}.zip.sig.json" $FORCE -out ../dist/release_notes.md
-          cat ../dist/release_notes.md
+          ZIP="dist/dazuofanyiguan_full.for.windows_${VERSION}.zip"
+          KEYFILE="$RUNNER_TEMP/legacy-update-key.pem"
+          trap 'rm -f "$KEYFILE"' EXIT
+          (umask 077; printf '%s\n' "$DZFYQ_UPDATE_PRIVATE_KEY_PEM" > "$KEYFILE")
+          python tools/sign_windows_update_package.py "$ZIP" --version "$VERSION" --private-key "$KEYFILE"
+          rm -f "$KEYFILE"
+          # 自检：签名必须能被本仓库里内置的（旧客户端用的）公钥验证，私钥不对会在这里失败。
+          SIG="$(jq -r .signature "$ZIP.sig.json")"
+          python tools/verify_update_signature.py "$ZIP" --version "$VERSION" --signature "$SIG"
+          # 说明 = Tolk 发布说明去掉它自己的签名/强更行，再追加旧客户端认的签名行。
+          {
+            grep -Ev '^(DZFYQ-SIG|update=)' dist/tolk_notes.md || true
+            echo
+            jq -r '.release_notes_markers[]' "$ZIP.sig.json"
+            if [ "${{ inputs.force_update }}" = "true" ]; then echo "update=1"; fi
+          } > dist/release_notes.md
+          rm -f dist/tolk_notes.md
+          cat dist/release_notes.md
       - name: Create the release
-        if: ${{ !inputs.mirror_only }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -104,23 +95,5 @@ jobs:
           if [[ "$LATEST" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
             echo "本仓库最新 Release 是 $LATEST，要发布的 $VERSION 不是更高的版本，拒绝（避免更新源倒退）" >&2; exit 1
           fi
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Tolk $TAG" --notes-file dist/release_notes.md --latest dist/*
-      - name: Reuse the already published release
-        if: ${{ inputs.mirror_only }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body > dist/release_notes.md
-          ls -l dist
-      - name: Mirror to Gitee
-        if: ${{ inputs.gitee || inputs.mirror_only }}
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        working-directory: tolk
-        run: |
-          set -euo pipefail
-          [ -n "$GITEE_TOKEN" ] || { echo "缺少 Secret GITEE_TOKEN（或取消勾选 gitee）" >&2; exit 1; }
-          go run ./cmd/tolk-release gitee -version "$VERSION" -assets ../dist -notes ../dist/release_notes.md -repo dazuofanyiguan
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Tolk $TAG" --notes-file dist/release_notes.md --latest \
+            "dist/dazuofanyiguan_full.for.windows_${VERSION}.zip" "dist/dazuofanyiguan_full.for.windows_${VERSION}.zip.sig.json" "dist/Tolk-setup-windows_${VERSION}.exe"
