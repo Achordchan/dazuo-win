@@ -23,6 +23,12 @@ on:
         default: true
         type: boolean
 
+      mirror_only:
+        description: 只补做 Gitee 镜像：复用本仓库已发布的这个版本，不重新签名、不重新发布（上次 Gitee 失败时用）
+        required: false
+        default: false
+        type: boolean
+
 permissions:
   contents: write
 
@@ -32,6 +38,9 @@ concurrency:
 
 jobs:
   bridge:
+    # 这个工作流会用旧私钥签名并发布"最新 Release"，只允许在默认分支上跑：
+    # 手动触发时选了别的分支也会通过 workflow_dispatch，所以这里显式拦住。
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ inputs.version }}
@@ -42,9 +51,14 @@ jobs:
       - name: Check inputs
         env:
           KEY: ${{ secrets.DZFYQ_UPDATE_PRIVATE_KEY_PEM }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "版本号必须是 x.y.z" >&2; exit 1; }
-          [ -n "$KEY" ] || { echo "缺少 Secret DZFYQ_UPDATE_PRIVATE_KEY_PEM" >&2; exit 1; }
+          [ "${{ inputs.mirror_only }}" = "true" ] || [ -n "$KEY" ] || { echo "缺少 Secret DZFYQ_UPDATE_PRIVATE_KEY_PEM" >&2; exit 1; }
+          # 发布之前就确认镜像的凭据在，免得 GitHub 发了、Gitee 却没发成。
+          if [ "${{ inputs.gitee }}" = "true" ] || [ "${{ inputs.mirror_only }}" = "true" ]; then
+            [ -n "$GITEE_TOKEN" ] || { echo "缺少 Secret GITEE_TOKEN（或取消勾选 gitee）" >&2; exit 1; }
+          fi
       - name: Fetch Tolk at the release tag
         uses: actions/checkout@v4
         with:
@@ -56,6 +70,7 @@ jobs:
         with:
           go-version: "1.27.1"
       - name: Download Tolk's Windows files
+        if: ${{ !inputs.mirror_only }}
         env:
           GH_TOKEN: ${{ env.TOLK_TOKEN }}
         run: |
@@ -65,6 +80,7 @@ jobs:
             --pattern "dazuofanyiguan_full.for.windows_${VERSION}.zip" --pattern "Tolk-setup-windows_${VERSION}.exe"
           ls -l dist
       - name: Sign with the legacy key and write the notes
+        if: ${{ !inputs.mirror_only }}
         env:
           DZFYQ_UPDATE_PRIVATE_KEY_PEM: ${{ secrets.DZFYQ_UPDATE_PRIVATE_KEY_PEM }}
         working-directory: tolk
@@ -77,6 +93,7 @@ jobs:
             -sig-json "../dist/dazuofanyiguan_full.for.windows_${VERSION}.zip.sig.json" $FORCE -out ../dist/release_notes.md
           cat ../dist/release_notes.md
       - name: Create the release
+        if: ${{ !inputs.mirror_only }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -88,8 +105,18 @@ jobs:
             echo "本仓库最新 Release 是 $LATEST，要发布的 $VERSION 不是更高的版本，拒绝（避免更新源倒退）" >&2; exit 1
           fi
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Tolk $TAG" --notes-file dist/release_notes.md --latest dist/*
+      - name: Reuse the already published release
+        if: ${{ inputs.mirror_only }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body > dist/release_notes.md
+          ls -l dist
       - name: Mirror to Gitee
-        if: ${{ inputs.gitee }}
+        if: ${{ inputs.gitee || inputs.mirror_only }}
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         working-directory: tolk
