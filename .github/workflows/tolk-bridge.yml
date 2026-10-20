@@ -82,6 +82,11 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then echo "$TAG 已存在，请提升版本号" >&2; exit 1; fi
+          # 旧客户端只看"最新 Release"的版本号：补发一个不比现有更高的版本，会让更新源倒退。
+          LATEST="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName 2>/dev/null || true)"; LATEST="${LATEST#v}"
+          if [[ "$LATEST" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+            echo "本仓库最新 Release 是 $LATEST，要发布的 $VERSION 不是更高的版本，拒绝（避免更新源倒退）" >&2; exit 1
+          fi
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Tolk $TAG" --notes-file dist/release_notes.md --latest dist/*
       - name: Mirror to Gitee
         if: ${{ inputs.gitee }}
