@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QMessageBox, QLineEdit, QTextBrowser, QTextEdit, QWidget
@@ -220,7 +220,7 @@ def apply_dialog_theme(widget: QWidget, owner: Optional[QWidget] = None) -> None
         install_chinese_context_menu(text_widget)
 
 
-def show_themed_message(
+def _create_themed_message(
     owner: Optional[QWidget],
     *,
     icon: QMessageBox.Icon,
@@ -230,7 +230,7 @@ def show_themed_message(
     buttons: QMessageBox.StandardButtons = QMessageBox.Ok,
     default_button: QMessageBox.StandardButton = QMessageBox.NoButton,
     primary_button: QMessageBox.StandardButton = QMessageBox.Ok,
-) -> int:
+) -> QMessageBox:
     box = QMessageBox(owner)
     box.setWindowTitle(title)
     box.setIcon(icon)
@@ -248,4 +248,24 @@ def show_themed_message(
         button.setObjectName("primaryButton" if standard_button == primary_button else "secondaryButton")
 
     apply_dialog_theme(box, owner)
-    return box.exec_()
+    return box
+
+
+def show_themed_message(owner: Optional[QWidget], **kwargs) -> int:
+    return _create_themed_message(owner, **kwargs).exec_()
+
+
+def open_themed_message(
+    owner: Optional[QWidget],
+    *,
+    on_finished: Optional[Callable[[int], None]] = None,
+    **kwargs,
+) -> QMessageBox:
+    """异步任务中使用信号接收选择，禁止 exec_ 嵌套运行 Qt 事件循环。"""
+    box = _create_themed_message(owner, **kwargs)
+    box.setAttribute(Qt.WA_DeleteOnClose)
+    box.setModal(True)
+    if on_finished is not None:
+        box.finished.connect(on_finished)
+    box.show()
+    return box
