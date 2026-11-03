@@ -142,4 +142,4 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "$GITEE_TOKEN" ] || { echo "缺少 Secret GITEE_TOKEN（或取消勾选 gitee）" >&2; exit 1; }
-          python tools/publish_gitee_release.py --version "$VERSION" --assets-dir dist --notes-file dist/release_notes.md --repo dazuofanyiguan --target master
+          python tools/publish_gitee_release.py --version "$VERSION" --assets-dir dist --notes-file dist/release_notes.md --repo dazuofanyiguan --target main
