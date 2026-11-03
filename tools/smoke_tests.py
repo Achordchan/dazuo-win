@@ -149,6 +149,7 @@ def check_update_manifest_and_script():
 
 
 def check_update_prompt_waits_for_changelog_modal():
+    from unittest.mock import Mock
     from PyQt5.QtWidgets import QDialog
     from src.gui import update_controller
     from src.gui.update_controller import UpdateCoordinator
@@ -193,10 +194,16 @@ def check_update_prompt_waits_for_changelog_modal():
     class FakeUpdatePromptDialog:
         def __init__(self, owner, version, notes, force_update):
             events.append(("prompt_init", coordinator._modal_dialog_active, version, notes, force_update))
+            self.finished = Mock()
 
-        def exec_(self):
-            events.append(("prompt_exec", coordinator._modal_dialog_active))
-            return QDialog.Rejected
+        def setAttribute(self, *args):
+            pass
+
+        def setModal(self, modal):
+            assert modal
+
+        def show(self):
+            events.append(("prompt_show", coordinator._modal_dialog_active))
 
     update_controller.GengXinRiZhi = FakeChangelogDialog
     update_controller.UpdatePromptDialog = FakeUpdatePromptDialog
@@ -207,6 +214,9 @@ def check_update_prompt_waits_for_changelog_modal():
     )
     try:
         coordinator.show_changelog_if_needed()
+        assert coordinator._modal_dialog_active is True
+        finished = coordinator._update_prompt_dialog.finished.connect.call_args.args[0]
+        finished(QDialog.Rejected)
     finally:
         update_controller.GengXinRiZhi = original_changelog
         update_controller.UpdatePromptDialog = original_prompt
@@ -218,7 +228,7 @@ def check_update_prompt_waits_for_changelog_modal():
         ("after_update_signal", True),
         ("persist", "1", update_controller.APP_VERSION),
         ("prompt_init", True, "9.9.9", "notes", False),
-        ("prompt_exec", True),
+        ("prompt_show", True),
     ]
     assert coordinator._pending_update_prompt is None
     assert coordinator._modal_dialog_active is False

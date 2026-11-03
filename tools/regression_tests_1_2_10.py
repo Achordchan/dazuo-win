@@ -193,8 +193,8 @@ async def check_unapproved_deeplx_release_waits_for_client():
         _achord_engine_update_active=False,
         _refresh_achord_engine_status=lambda text: statuses.append(text),
     )
-    original_message = shezhi_chuangkou.show_themed_message
-    shezhi_chuangkou.show_themed_message = lambda *_args, **kwargs: (
+    original_message = shezhi_chuangkou.open_themed_message
+    shezhi_chuangkou.open_themed_message = lambda *_args, **kwargs: (
         messages.append(kwargs)
     )
     try:
@@ -202,7 +202,7 @@ async def check_unapproved_deeplx_release_waits_for_client():
             owner, release, "1.2.2"
         )
     finally:
-        shezhi_chuangkou.show_themed_message = original_message
+        shezhi_chuangkou.open_themed_message = original_message
     assert owner._last_achord_release_approved is False
     assert button.enabled is False
     assert statuses[-1] == "发现 v9.9.9 · 等待客户端适配"
@@ -230,7 +230,7 @@ async def check_unapproved_deeplx_release_waits_for_client():
         _achord_engine_update_active=False,
         _refresh_achord_engine_status=lambda text: approved_statuses.append(text),
     )
-    shezhi_chuangkou.show_themed_message = lambda *_args, **kwargs: (
+    shezhi_chuangkou.open_themed_message = lambda *_args, **kwargs: (
         approved_messages.append(kwargs)
     )
     try:
@@ -238,7 +238,7 @@ async def check_unapproved_deeplx_release_waits_for_client():
             approved_owner, release, "1.2.2"
         )
     finally:
-        shezhi_chuangkou.show_themed_message = original_message
+        shezhi_chuangkou.open_themed_message = original_message
     assert approved_owner._last_achord_release_approved is True
     assert approved_button.enabled is True
     assert approved_statuses[-1] == "发现 v9.9.9"

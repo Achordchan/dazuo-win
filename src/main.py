@@ -116,6 +116,8 @@ def setup_logging() -> None:
             filename=os.path.join(log_dir, "app.log"),
             level=logging.INFO,
             format="%(asctime)s - %(levelname)s - %(message)s",
+            encoding="utf-8",
+            force=True,
         )
     except Exception as error:
         print(f"设置日志失败: {error}")
@@ -145,8 +147,8 @@ def _ensure_project_paths() -> None:
 
 
 setup_platform_app_identity()
-setup_qt_plugin_paths()
 setup_logging()
+setup_qt_plugin_paths()
 _ensure_project_paths()
 
 from src.gui.zhuchuangkou import ZhuChuangKou

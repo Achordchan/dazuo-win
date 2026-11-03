@@ -31,8 +31,6 @@ from src.gongju.update_trust import (
     verify_package_authenticity,
 )
 
-# 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 

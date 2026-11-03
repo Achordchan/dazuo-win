@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from .dialog_utils import apply_dialog_theme, install_chinese_context_menu, show_themed_message
+from .dialog_utils import apply_dialog_theme, install_chinese_context_menu, open_themed_message, show_themed_message
 from .gengxinrizhi import GengXinRiZhi
 from ..gongju.update import Updater
 from ..version import APP_VERSION
@@ -121,6 +121,7 @@ class UpdateCoordinator:
         self._update_checking = False
         self._update_error_occurred = False
         self._modal_dialog_active = False
+        self._update_prompt_dialog = None
         self._pending_update_prompt = None
         self._update_operation_active = False
         self._feedback_owner = None
@@ -273,24 +274,40 @@ class UpdateCoordinator:
         self._modal_dialog_active = True
         try:
             dialog = UpdatePromptDialog(self.owner, version, notes, force_update)
-            result = dialog.exec_()
-        finally:
+            self._update_prompt_dialog = dialog
+            dialog.setAttribute(Qt.WA_DeleteOnClose)
+            dialog.setModal(True)
+            dialog.finished.connect(lambda result: self._on_update_prompt_finished(result, force_update))
+            dialog.show()
+        except Exception:
+            self._update_prompt_dialog = None
             self._modal_dialog_active = False
+            raise
+
+    def _on_update_prompt_finished(self, result, force_update):
+        self._update_prompt_dialog = None
+        self._modal_dialog_active = False
         if result == QDialog.Accepted:
             self._start_update_download()
             self._flush_pending_update_prompt()
             return
 
         if force_update:
-            show_themed_message(
+            self._modal_dialog_active = True
+            open_themed_message(
                 self.owner,
                 icon=QMessageBox.Critical,
                 title="必须更新",
                 text="此版本为重要更新，未更新将退出程序。",
                 buttons=QMessageBox.Ok,
+                on_finished=lambda _result: self._exit_after_update_message(0),
             )
-            sys.exit(0)
+            return
         self._flush_pending_update_prompt()
+
+    def _exit_after_update_message(self, code):
+        self._modal_dialog_active = False
+        sys.exit(code)
 
     def on_update_progress(self, progress):
         if self.progress_dialog is not None:
@@ -299,26 +316,29 @@ class UpdateCoordinator:
     def on_update_error(self, error):
         self._update_operation_active = False
         self._update_error_occurred = True
-        show_themed_message(
+        if self.progress_dialog is not None:
+            self.progress_dialog.close()
+        open_themed_message(
             self.owner,
             icon=QMessageBox.Warning,
             title="更新失败",
             text=error,
             buttons=QMessageBox.Ok,
+            on_finished=lambda _result: self._show_force_update_failure(),
         )
-        if self.progress_dialog is not None:
-            self.progress_dialog.close()
 
+    def _show_force_update_failure(self):
         if getattr(self.updater, "force_update", False):
-            show_themed_message(
+            self._modal_dialog_active = True
+            open_themed_message(
                 self.owner,
                 icon=QMessageBox.Critical,
                 title="更新失败",
                 text="强制更新失败，程序将退出。",
                 informative_text="请检查网络连接后重试。",
                 buttons=QMessageBox.Ok,
+                on_finished=lambda _result: self._exit_after_update_message(1),
             )
-            sys.exit(1)
 
     def on_update_complete(self, file_path):
         if self.progress_dialog is not None:
@@ -331,19 +351,19 @@ class UpdateCoordinator:
 
         if force_update:
             if sys.platform == "darwin":
-                show_themed_message(
+                open_themed_message(
                     self.owner,
                     icon=QMessageBox.Information,
                     title="下载完成",
                     text="更新已下载完成，将打开 DMG。",
                     informative_text="请手动将应用替换为新版本后重新启动。",
                     buttons=QMessageBox.Ok,
+                    on_finished=lambda _result: self._install_non_windows_update(file_path),
                 )
-                self._install_non_windows_update(file_path)
                 return
 
         if sys.platform == "darwin":
-            reply = show_themed_message(
+            open_themed_message(
                 self.owner,
                 icon=QMessageBox.Information,
                 title="下载完成",
@@ -352,15 +372,11 @@ class UpdateCoordinator:
                 buttons=QMessageBox.Ok | QMessageBox.Cancel,
                 default_button=QMessageBox.Ok,
                 primary_button=QMessageBox.Ok,
+                on_finished=lambda reply: self._on_macos_update_confirmed(reply, file_path),
             )
-            if reply == QMessageBox.Ok:
-                self._install_non_windows_update(file_path)
-            else:
-                self.updater.discard_downloaded_update(file_path)
-                self._update_operation_active = False
             return
 
-        show_themed_message(
+        open_themed_message(
             self.owner,
             icon=QMessageBox.Warning,
             title="暂不支持",
@@ -369,6 +385,13 @@ class UpdateCoordinator:
         )
         self.updater.discard_downloaded_update(file_path)
         self._update_operation_active = False
+
+    def _on_macos_update_confirmed(self, reply, file_path):
+        if reply == QMessageBox.Ok:
+            self._install_non_windows_update(file_path)
+        else:
+            self.updater.discard_downloaded_update(file_path)
+            self._update_operation_active = False
 
     def _start_update_download(self):
         if self._update_operation_active or getattr(self.updater, "download_in_progress", False):
